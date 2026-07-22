@@ -21,6 +21,24 @@ Dieses Pack ist für eine **lineare Implementierung im selben Repository und mö
 
 Die Prompts enthalten absichtlich harte Grenzen. Sie sind keine Vorschläge, sondern Teil der Produktspezifikation.
 
+## Aktuelle VoiceDesign-Erweiterung
+
+Die folgende, am 22. Juli 2026 freigegebene Änderung ersetzt alle älteren Aussagen
+in diesem Prompt Pack zu `CustomVoice`, `Aiden`, einer ausschließlich deutschen
+Sprache oder dem Alias `de_standard_01`:
+
+- TTS ist `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` über den gepinnten lokalen
+  GGML/CUDA-Streamingpfad.
+- Unterstützte öffentliche Sprachen sind `de`, `en`, `fr` und `it`.
+- Unterstützte Stimmen sind genau `warm_female`, `clear_female`, `warm_male`,
+  `clear_male` und `friendly_neutral`.
+- Diese IDs bilden auf feste, vom Betreiber konfigurierte VoiceDesign-Beschreibungen
+  mit muttersprachlicher Aussprache der gewählten Sprache ab.
+- Es gibt weiterhin kein Voice Cloning, kein Referenzaudio, keine Client-Pfade und
+  keine frei übermittelte Basisbeschreibung. Begrenzte zusätzliche Stilhinweise
+  dürfen nur an das feste Profil angehängt werden.
+- Google TTS und Cloud-TTS gehören nicht zum Laufzeit- oder Erzeugungspfad.
+
 ---
 
 # 1. Normative Upstream-Basis
@@ -109,7 +127,7 @@ Die Modellstrecke des Hugging-Voice-Spaces wird lokal nachgebaut:
 Silero VAD
   → nvidia/parakeet-tdt-0.6b-v3
   → google/gemma-4-31B-it, lokal quantisiert über llama.cpp
-  → Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+  → Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
 ```
 
 Festlegungen:
@@ -117,10 +135,10 @@ Festlegungen:
 - **Gemma 4 31B ist verbindlich.** Das kleinere `gemma-4-E4B-it` darf nicht als stiller Ersatz verwendet werden.
 - Standard-GGUF-Basis ist `ggml-org/gemma-4-31B-it-GGUF`, zunächst in einer verifizierten 4-Bit-Variante, bevorzugt `Q4_0` oder eine nach Messung bessere, dokumentierte 4-Bit-Variante.
 - Parakeet ist wegen Deutsch `nvidia/parakeet-tdt-0.6b-v3`, nicht das englische 1.1B-Modell aus dem Space.
-- TTS bleibt `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`.
-- Öffentliche Stimme ist ausschließlich der Alias `de_standard_01`. Der interne Qwen-Speaker startet mit `Aiden`, kann nach einem dokumentierten deutschen Hörtest aber ohne API-Änderung umgestellt werden.
-- Sprache ist fest `de` beziehungsweise `German`.
-- Voice Cloning, Voice Design und frei wählbare Stimmen gehören nicht zum Produktumfang.
+- TTS bleibt `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
+- Öffentliche Stimmen sind die fünf festen VoiceDesign-Profile aus der aktuellen Erweiterung.
+- Sprachen sind `de`, `en`, `fr` und `it`.
+- Voice Cloning, Referenzaudio und frei übermittelte VoiceDesign-Beschreibungen gehören nicht zum Produktumfang.
 
 ---
 
@@ -134,7 +152,7 @@ Du implementierst ein neues Repository namens `livekit-hugging-voice`.
 Das Produkt besteht aus:
 
 1. einem lokalen GPU-Service, der die Hugging-Voice-Strecke
-   Silero VAD → Parakeet TDT 0.6B v3 → Gemma 4 31B IT → Qwen3-TTS 1.7B CustomVoice
+   Silero VAD → Parakeet TDT 0.6B v3 → Gemma 4 31B IT → Qwen3-TTS 1.7B VoiceDesign
    ausführt;
 2. einem eigenen Python-Plugin `livekit-plugins-hugging-voice`, das ein echtes
    `livekit.agents.llm.RealtimeModel` und eine `RealtimeSession` implementiert;
@@ -166,7 +184,7 @@ Nicht verhandelbare Produktgrenzen:
 - maximal zwei verbundene Sessions pro GPU-Service-Instanz; ein dritter Client wird
   eindeutig abgewiesen, nicht in eine Queue gestellt;
 - Gemma 4 31B, nicht E4B;
-- eine feste deutsche Stimme `de_standard_01`;
+- vier feste Sprachen und fünf feste VoiceDesign-Profile;
 - keine erfundenen Benchmarks oder Erfolgsmeldungen.
 
 Architektur:
@@ -507,21 +525,17 @@ Vom LiveKit-Agent gelieferte Instructions werden zusätzlich, nicht anstelle die
 ## TTS
 
 ```yaml
-model: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+model: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
 device: cuda
-language: German
-public_voice: de_standard_01
-initial_qwen_speaker: Aiden
-instruction: >-
-  Sprich in klarem, ruhigem Hochdeutsch. Natürlich, freundlich und professionell.
-  Keine übertriebene Emotionalität.
+languages: [German, English, French, Italian]
+public_voices: [warm_female, clear_female, warm_male, clear_male, friendly_neutral]
 ```
 
 Regeln:
 
 - ein geladenes Qwen-Modell pro Pod;
 - `faster-qwen3-tts`-Streamingpfad unter Linux/CUDA;
-- keine freie Speaker- oder Pfadauswahl durch Clients;
+- keine freie Basisbeschreibung oder Pfadauswahl durch Clients;
 - keine Referenzaudios;
 - Text wird in kurze, geordnete Sprachsegmente zerlegt;
 - Segmentlänge wird begrenzt, damit eine Session den einzigen TTS-Worker nicht lange blockiert;
@@ -587,7 +601,7 @@ Erlaubt:
 - Server-VAD an/aus und dokumentierte Schwellenwerte innerhalb sicherer Grenzen;
 - `interrupt_response`;
 - Aktivierung eingebauter Transkription;
-- Voice ausschließlich `de_standard_01`.
+- Voice ausschließlich aus den fünf festen VoiceDesign-Profilen.
 
 Nicht erlaubt:
 
@@ -638,10 +652,10 @@ response.done
     "vad": "silero-vad",
     "stt": "nvidia/parakeet-tdt-0.6b-v3",
     "llm": "google/gemma-4-31B-it",
-    "tts": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    "tts": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
   },
   "language": "de",
-  "voice": "de_standard_01",
+  "voice": "warm_female",
   "input_sample_rate": 16000,
   "output_sample_rate": 24000
 }
@@ -682,7 +696,7 @@ model = RealtimeModel(
     base_url="ws://hugging-voice-gpu:8765/v1/realtime",
     token="...",
     language="de",
-    voice="de_standard_01",
+    voice="warm_female",
 )
 
 session = AgentSession(llm=model)
@@ -1288,16 +1302,17 @@ Auf selbst gehostetem NVIDIA-Runner oder lokal:
 
 ## Voice Audition
 
-`benchmarks/voice_audition.py` erzeugt für denselben deutschen Text Samples für:
+`benchmarks/voice_audition.py` erzeugt für identische Texte Samples für:
 
 ```text
-Aiden
-Ryan
-Serena
-Sohee
+warm_female
+clear_female
+warm_male
+clear_male
+friendly_neutral
 ```
 
-Die Auswahl wird in `docs/model-selection.md` dokumentiert. Der öffentliche Alias bleibt immer `de_standard_01`.
+Die Auswahl je Sprache wird in `docs/model-selection.md` dokumentiert.
 
 ## Zielwerte auf der Referenzhardware
 
@@ -1452,8 +1467,8 @@ Aufgaben:
    - nur PCM16 mono;
    - Input 16 kHz;
    - Output 24 kHz;
-   - Voice nur `de_standard_01`;
-   - Sprache nur `de`;
+   - Voice nur aus den fünf festen Profilen;
+   - Sprache nur `de`, `en`, `fr` oder `it`;
    - keine Tools oder Modellnamen in `session.update`;
    - maximale Größen für Instructions, Context-Items und Audioevents.
 6. Implementiere kleine gemeinsame Audiohilfen:
@@ -1482,7 +1497,7 @@ Aufgaben:
 11. Trage mindestens ein:
    - `ggml-org/gemma-4-31B-it-GGUF`, 4-Bit-Datei des 31B-Modells;
    - `nvidia/parakeet-tdt-0.6b-v3`;
-   - `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`;
+   - `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`;
    - Silero-Artefakt beziehungsweise die gepinnte Packagequelle.
 12. Verwende keine `main`-Revision im finalen Lockfile. Falls der Download in der
    aktuellen Umgebung nicht möglich ist, implementiere und teste die Auflösung mit
@@ -1558,8 +1573,8 @@ Aufgaben:
    - verwende `faster-qwen3-tts` mit GGML/CUDA-Pfad;
    - lokaler Modellpfad;
    - Modell genau einmal laden;
-   - Sprache `German`, Speaker initial `Aiden`, feste Instruction;
-   - keine Session-Voice-Overrides außer dem validierten öffentlichen Alias;
+   - vier Modellsprachen und fünf feste, sprachabhängige VoiceDesign-Beschreibungen;
+   - Session-Voice-Overrides nur über die validierten öffentlichen IDs;
    - Streaminggenerator;
    - Warmup;
    - PCM-Normalisierung;
@@ -1783,7 +1798,7 @@ Aufgaben:
    - `base_url` oder `base_urls`;
    - `token` beziehungsweise Token-Datei/Environment;
    - `language="de"`;
-   - `voice="de_standard_01"`;
+   - `voice="warm_female"`;
    - `instructions` optional;
    - `http_session` optional;
    - `conn_options` nach LiveKit-Konvention;
@@ -2300,10 +2315,10 @@ Aufgaben:
    - keine Modellverkleinerung, Cloudroute oder Qualitätsabsenkung;
    - verbleibende Abweichung offen dokumentieren.
 9. Stimme:
-   - Aiden, Ryan, Serena und Sohee mit identischen deutschen Sätzen erzeugen;
+   - alle fünf VoiceDesign-Profile mit identischen Sätzen je Sprache erzeugen;
    - Audition-Artefakte nicht automatisch ins Git einchecken, wenn sie groß sind;
    - Auswahl in `docs/model-selection.md` begründen;
-   - `de_standard_01` auf die gewählte Stimme pinnen;
+   - Defaultprofil nach dokumentiertem Hörtest auswählen;
    - API bleibt unverändert.
 10. Führe LiveKit-E2E mit realer `AgentSession` aus:
     - Nutzer spricht Deutsch;
@@ -2464,7 +2479,7 @@ https://github.com/ggml-org/llama.cpp
 https://huggingface.co/google/gemma-4-31B-it
 https://huggingface.co/ggml-org/gemma-4-31B-it-GGUF
 https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
-https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
 ```
 
 ## Wichtige abschließende Erinnerung

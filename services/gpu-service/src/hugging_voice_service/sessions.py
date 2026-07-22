@@ -88,6 +88,9 @@ class SessionState:
     transport: SessionTransport
     vad: SessionVAD
     instructions: str = ""
+    language: str = "de"
+    voice: str = "warm_female"
+    voice_instructions: str | None = None
     conversation: Conversation = field(default_factory=Conversation)
     input_audio_buffer: BoundedAudioBuffer = field(default_factory=BoundedAudioBuffer)
     current_turn_id: str | None = None

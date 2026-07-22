@@ -40,6 +40,7 @@ from hugging_voice_protocol.events import (
 )
 
 from .cancellation import GenerationToken
+from .config import SpeechSettings
 from .conversation import ConversationRole
 from .runtimes.gemma import GemmaMessage, TextDelta, TextUsage
 from .schedulers.stt import STTJob
@@ -57,6 +58,8 @@ class GemmaStreamer(Protocol):
         *,
         messages: Sequence[GemmaMessage],
         instructions: str = "",
+        language_instruction: str = "",
+        system_prompt: str = "",
         max_tokens: int = 256,
     ) -> AsyncIterator[TextDelta | TextUsage]: ...
 
@@ -92,6 +95,10 @@ class ResponseContext:
     item_id: str
     token: GenerationToken
     instructions: str
+    model_language: str
+    language_instruction: str
+    voice_instructions: str
+    system_prompt: str
     started_at: float
     speech_stopped_at: float | None
     text: str = ""
@@ -113,12 +120,14 @@ class VoicePipeline:
         stt: STTScheduling,
         tts: TTSScheduling,
         gemma: GemmaStreamer,
+        speech: SpeechSettings,
         telemetry: ServiceTelemetry,
     ) -> None:
         self.state = state
         self._stt = stt
         self._tts = tts
         self._gemma = gemma
+        self._speech = speech
         self._telemetry = telemetry
         self._response: ResponseContext | None = None
         self._response_task: asyncio.Task[None] | None = None
@@ -194,7 +203,14 @@ class VoicePipeline:
         if self.state.current_turn_id is not None and self.state.speech_start_sample is not None:
             raise ValueError("cannot change VAD settings during an active speech turn")
         config = event.session
+        language = config.language or self._speech.default_language
+        voice = config.voice or self._speech.default_voice
+        self._speech.resolve_language(language)
+        self._speech.resolve_voice(voice)
         self.state.instructions = config.instructions
+        self.state.language = language
+        self.state.voice = voice
+        self.state.voice_instructions = config.voice_instructions
         self.state.vad_enabled = config.turn_detection.enabled
         self.state.transcription_enabled = config.input_audio_transcription
         self.state.interrupt_response = config.interrupt_response
@@ -451,6 +467,8 @@ class VoicePipeline:
         instructions = self.state.instructions
         if response_instructions.strip():
             instructions = f"{instructions}\n{response_instructions}".strip()
+        language = self._speech.resolve_language(self.state.language)
+        voice = self._speech.resolve_voice(self.state.voice)
         context = ResponseContext(
             turn_id=turn_id,
             turn_revision=self.state.current_turn_revision,
@@ -459,6 +477,13 @@ class VoicePipeline:
             item_id=item_id,
             token=token,
             instructions=instructions,
+            model_language=language.model_language,
+            language_instruction=language.response_instruction,
+            voice_instructions=voice.render(
+                language.model_language,
+                self.state.voice_instructions,
+            ),
+            system_prompt=self._speech.system_prompt,
             started_at=time.monotonic(),
             speech_stopped_at=self._speech_stopped_at,
         )
@@ -483,6 +508,8 @@ class VoicePipeline:
             async for event in self._gemma.stream_response(
                 messages=self.state.conversation.messages(),
                 instructions=context.instructions,
+                language_instruction=context.language_instruction,
+                system_prompt=context.system_prompt,
             ):
                 if not self.state.cancellation.is_current(context.token):
                     self._telemetry.stale_chunks_dropped.inc()
@@ -593,7 +620,8 @@ class VoicePipeline:
                 TTSJob(
                     token=context.token,
                     text=segment,
-                    voice="de_standard_01",
+                    language=context.model_language,
+                    instructions=context.voice_instructions,
                     is_current=lambda: self.state.cancellation.is_current(context.token),
                     on_frame=send_frame,
                 )

@@ -45,10 +45,12 @@ class RecordingTTS:
         self,
         text: str,
         *,
-        voice: str,
+        language: str,
+        instructions: str,
         cancelled: Callable[[], bool],
     ) -> AsyncIterator[bytes]:
-        assert voice == "de_standard_01"
+        assert language == "German"
+        assert instructions == "calm"
         self.calls.append(text)
         if not cancelled():
             yield bytes(960)
@@ -83,7 +85,8 @@ def tts_job(session: str, value: str, frames: list[bytes] | None = None) -> TTSJ
     return TTSJob(
         token=token(session, value),
         text=value,
-        voice="de_standard_01",
+        language="German",
+        instructions="calm",
         is_current=lambda: True,
         on_frame=record,
     )
@@ -176,10 +179,11 @@ async def test_tts_forwards_each_frame_before_segment_generation_finishes() -> N
             self,
             text: str,
             *,
-            voice: str,
+            language: str,
+            instructions: str,
             cancelled: Callable[[], bool],
         ) -> AsyncIterator[bytes]:
-            del text, voice, cancelled
+            del text, language, instructions, cancelled
             yield b"first"
             first_generated.set()
             await continue_generation.wait()
@@ -194,7 +198,8 @@ async def test_tts_forwards_each_frame_before_segment_generation_finishes() -> N
     job = TTSJob(
         token=token("session_a", "stream"),
         text="stream",
-        voice="de_standard_01",
+        language="German",
+        instructions="calm",
         is_current=lambda: True,
         on_frame=record,
     )

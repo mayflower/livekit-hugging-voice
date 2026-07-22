@@ -17,12 +17,12 @@ models:
       - path: parakeet-tdt-0.6b-v3.nemo
 
   - delivery: huggingface
-    id: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    id: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
     source_repo: Serveurperso/Qwen3-TTS-GGUF
     revision: e0f336a048a3de02b29b8ad92969217d9ecffe3e
     license: Apache-2.0
     files:
-      - path: qwen-talker-1.7b-customvoice-BF16.gguf
+      - path: qwen-talker-1.7b-voicedesign-BF16.gguf
       - path: qwen-tokenizer-12hz-BF16.gguf
 
   - delivery: python-package

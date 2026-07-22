@@ -249,6 +249,9 @@ class RealtimeService:
             )
             return
 
+        state.language = self.settings.speech.default_language
+        state.voice = self.settings.speech.default_voice
+
         logger.info(
             "realtime_session_admitted",
             extra={"session_id": session_id, "slot": state.slot.index},
@@ -454,6 +457,7 @@ class RealtimeService:
             stt=self._stt,
             tts=self._tts,
             gemma=cast(GemmaStreamer, self.lifecycle.gemma),
+            speech=self.settings.speech,
             telemetry=self.lifecycle.telemetry,
         )
 
@@ -470,8 +474,12 @@ class RealtimeService:
                 vad=revisions["silero-vad"],
                 stt=revisions["nvidia/parakeet-tdt-0.6b-v3"],
                 llm=revisions["google/gemma-4-31B-it"],
-                tts=revisions["Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"],
+                tts=revisions["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"],
             ),
+            language=self.settings.speech.default_language,
+            voice=self.settings.speech.default_voice,
+            supported_languages=tuple(sorted(self.settings.speech.languages)),
+            supported_voices=tuple(sorted(self.settings.speech.voices)),
         )
 
     def _authenticated(self, websocket: WebSocket) -> bool:

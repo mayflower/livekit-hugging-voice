@@ -100,19 +100,19 @@ def make_settings_and_lock(tmp_path: Path) -> ServiceSettings:
         ),
         LockedModel(
             delivery="huggingface",
-            id="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+            id="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
             source_repo="Serveurperso/Qwen3-TTS-GGUF",
             revision=REVISION,
             files=(
                 locked_file(
                     root,
-                    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-                    "qwen-talker-1.7b-customvoice-BF16.gguf",
+                    "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+                    "qwen-talker-1.7b-voicedesign-BF16.gguf",
                     b"talker",
                 ),
                 locked_file(
                     root,
-                    "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+                    "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
                     "qwen-tokenizer-12hz-BF16.gguf",
                     b"codec",
                 ),
@@ -159,7 +159,7 @@ async def test_lifecycle_loads_each_runtime_once_and_reports_real_readiness(
         cuda_probe=lambda: None,
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: parakeet,
-        qwen_factory=lambda talker, codec: qwen,
+        qwen_factory=lambda talker, codec, speech: qwen,
         gemma_factory=lambda port, violation: gemma,
         gpu_memory_probe=lambda: 123_456,
     )
@@ -257,7 +257,7 @@ async def test_warmup_failure_cleans_started_resources_and_stays_unready(
         cuda_probe=lambda: None,
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: parakeet,
-        qwen_factory=lambda talker, codec: qwen,
+        qwen_factory=lambda talker, codec, speech: qwen,
         gemma_factory=lambda port, violation: FakeGemma(),
     )
     await lifecycle.start()
@@ -305,7 +305,7 @@ async def test_unexpected_llama_exit_immediately_revokes_readiness(
         cuda_probe=lambda: None,
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: FakeBlockingRuntime(),
-        qwen_factory=lambda talker, codec: FakeBlockingRuntime(),
+        qwen_factory=lambda talker, codec, speech: FakeBlockingRuntime(),
         gemma_factory=lambda port, violation: FakeGemma(),
     )
     await lifecycle.start()

@@ -188,18 +188,23 @@ class RealtimeModel(LiveKitRealtimeModel):
         headless_tls: bool = False,
         token: str | None = None,
         token_file: str | Path | None = None,
-        language: Literal["de"] = "de",
-        voice: Literal["de_standard_01"] = "de_standard_01",
+        language: str | None = None,
+        voice: str | None = None,
+        voice_instructions: str | None = None,
         instructions: str = "",
         http_session: aiohttp.ClientSession | None = None,
         conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
     ) -> None:
-        if language != "de":
-            raise ValueError("Hugging Voice supports only language='de'")
-        if voice != "de_standard_01":
-            raise ValueError("Hugging Voice supports only voice='de_standard_01'")
         if len(instructions) > 8_000:
             raise ValueError("instructions exceed the 8,000 character protocol limit")
+        try:
+            validated = SessionConfig(
+                language=language,
+                voice=voice,
+                voice_instructions=voice_instructions,
+            )
+        except ValueError as exc:
+            raise ValueError(f"invalid speech configuration: {exc}") from exc
         super().__init__(
             capabilities=RealtimeCapabilities(
                 message_truncation=False,
@@ -228,6 +233,9 @@ class RealtimeModel(LiveKitRealtimeModel):
             self._resolver = EndpointResolver(static_urls=urls)
         self._token = resolve_token(token=token, token_file=token_file)
         self._instructions = instructions
+        self._language = validated.language
+        self._voice = validated.voice
+        self._voice_instructions = validated.voice_instructions
         self._conn_options = conn_options
         self._http_session = http_session
         self._owns_http_session = http_session is None
@@ -282,6 +290,9 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         self._chat_ctx = ChatContext.empty()
         self._tools = ToolContext([])
         self._instructions = model._instructions
+        self._language = model._language
+        self._voice = model._voice
+        self._voice_instructions = model._voice_instructions
         self._outbound: asyncio.Queue[_Command | object] = asyncio.Queue(OUTBOUND_QUEUE_SIZE)
         self._audio_input: asyncio.Queue[rtc.AudioFrame | _AudioControl | object] = asyncio.Queue(
             INPUT_AUDIO_QUEUE_SIZE
@@ -317,6 +328,33 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         if len(instructions) > 8_000:
             raise RealtimeError("instructions exceed the 8,000 character limit")
         self._instructions = instructions
+        if self._connected.is_set():
+            await self._queue_async(_Command("session_update", _id("evt")))
+
+    async def update_speech_options(
+        self,
+        *,
+        language: str | None = None,
+        voice: str | None = None,
+        voice_instructions: NotGivenOr[str | None] = NOT_GIVEN,
+    ) -> None:
+        """Update language, voice, or Qwen speaking-style instructions."""
+        try:
+            validated = SessionConfig(
+                instructions=self._instructions,
+                language=self._language if language is None else language,
+                voice=self._voice if voice is None else voice,
+                voice_instructions=(
+                    self._voice_instructions
+                    if not utils.is_given(voice_instructions)
+                    else voice_instructions
+                ),
+            )
+        except ValueError as exc:
+            raise RealtimeError(f"invalid speech configuration: {exc}") from exc
+        self._language = validated.language
+        self._voice = validated.voice
+        self._voice_instructions = validated.voice_instructions
         if self._connected.is_set():
             await self._queue_async(_Command("session_update", _id("evt")))
 
@@ -503,6 +541,10 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                 continue
             self._ws = ws
             self._session_id = created.session_id
+            if self._language is None:
+                self._language = created.language
+            if self._voice is None:
+                self._voice = created.voice
             self._sequence = 0
             await self._send_direct(self._session_update_event())
             for message in self._validated_messages(self._chat_ctx):
@@ -932,7 +974,12 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         return SessionUpdateEvent(
             event_id=event_id or _id("evt"),
             session_id=session_id,
-            session=SessionConfig(instructions=self._instructions),
+            session=SessionConfig(
+                instructions=self._instructions,
+                language=self._language,
+                voice=self._voice,
+                voice_instructions=self._voice_instructions,
+            ),
         )
 
     def _conversation_command(self, message: ChatMessage) -> _Command:

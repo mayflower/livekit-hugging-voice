@@ -11,6 +11,7 @@ from .audio import MAX_AUDIO_BASE64_CHARS, decode_pcm16_base64
 from .errors import ErrorCode
 
 MAX_INSTRUCTIONS_CHARS = 8_000
+MAX_VOICE_INSTRUCTIONS_CHARS = 2_000
 MAX_CONTEXT_ITEM_CHARS = 16_000
 MAX_TEXT_DELTA_CHARS = 4_096
 MAX_ERROR_MESSAGE_CHARS = 2_048
@@ -21,6 +22,14 @@ TurnId = Annotated[str, Field(pattern=r"^turn_[A-Za-z0-9_-]{1,91}$", max_length=
 GenerationId = Annotated[str, Field(pattern=r"^gen_[A-Za-z0-9_-]{1,92}$", max_length=96)]
 ResponseId = Annotated[str, Field(pattern=r"^resp_[A-Za-z0-9_-]{1,91}$", max_length=96)]
 ItemId = Annotated[str, Field(pattern=r"^item_[A-Za-z0-9_-]{1,91}$", max_length=96)]
+LanguageCode = Annotated[
+    str,
+    Field(pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$", max_length=35),
+]
+VoiceId = Annotated[
+    str,
+    Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$", max_length=64),
+]
 
 
 class StrictModel(BaseModel):
@@ -75,8 +84,12 @@ class ServerVADConfig(StrictModel):
 
 class SessionConfig(StrictModel):
     instructions: str = Field(default="", max_length=MAX_INSTRUCTIONS_CHARS)
-    language: Literal["de"] = "de"
-    voice: Literal["de_standard_01"] = "de_standard_01"
+    language: LanguageCode | None = None
+    voice: VoiceId | None = None
+    voice_instructions: str | None = Field(
+        default=None,
+        max_length=MAX_VOICE_INSTRUCTIONS_CHARS,
+    )
     input_audio_format: InputAudioFormat = Field(default_factory=InputAudioFormat)
     output_audio_format: OutputAudioFormat = Field(default_factory=OutputAudioFormat)
     turn_detection: ServerVADConfig = Field(default_factory=ServerVADConfig)
@@ -88,7 +101,7 @@ class SessionModels(StrictModel):
     vad: Literal["silero-vad"] = "silero-vad"
     stt: Literal["nvidia/parakeet-tdt-0.6b-v3"] = "nvidia/parakeet-tdt-0.6b-v3"
     llm: Literal["google/gemma-4-31B-it"] = "google/gemma-4-31B-it"
-    tts: Literal["Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"] = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+    tts: Literal["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"] = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
 
 
 class ModelRevisions(StrictModel):
@@ -180,8 +193,14 @@ class SessionCreatedEvent(EventBase):
     type: Literal["session.created"] = "session.created"
     models: SessionModels
     revisions: ModelRevisions
-    language: Literal["de"] = "de"
-    voice: Literal["de_standard_01"] = "de_standard_01"
+    language: LanguageCode = "de"
+    voice: VoiceId = "warm_female"
+    supported_languages: tuple[LanguageCode, ...] = Field(
+        default=("de",), min_length=1, max_length=32
+    )
+    supported_voices: tuple[VoiceId, ...] = Field(
+        default=("warm_female",), min_length=1, max_length=64
+    )
     input_sample_rate: Literal[16_000] = 16_000
     output_sample_rate: Literal[24_000] = 24_000
 

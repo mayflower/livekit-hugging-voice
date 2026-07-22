@@ -21,10 +21,11 @@ commit and complete a real generation probe, load/warm Parakeet from its local
 visible Gemma warmup. Partial failure unwinds already-created resources and leaves
 readiness red. Unexpected llama-server exit also revokes readiness immediately.
 
-Gemma requests always prepend the fixed German speech prompt, cap output at 256
-tokens, and pass `chat_template_kwargs.enable_thinking=false`. Reasoning fields
-are suppressed, and a defensive streaming filter quarantines a leading thinking
-block rather than exposing it to later TTS stages.
+Gemma requests prepend the operator-configured speech system prompt and the selected
+language's response instruction, cap output at 256 tokens, and pass
+`chat_template_kwargs.enable_thinking=false`. Reasoning fields are suppressed, and
+a defensive streaming filter quarantines a leading thinking block rather than
+exposing it to later TTS stages.
 
 Shared STT and TTS runtimes are protected by small bounded fair schedulers. Gemma
 allows two text generations while keeping request and cancellation state isolated.
@@ -39,12 +40,20 @@ may be dropped. Session release cancels the active generation, drains shared-wor
 work for that session, clears VAD/audio/conversation state, and only then returns a
 slot to `idle`.
 
+## Configurable speech policy
+
+- Public language codes map to Qwen model-language names and LLM response
+  instructions in `speech.languages`.
+- Public voice IDs map to fixed Qwen VoiceDesign descriptions in `speech.voices`.
+- A session selects a configured language and voice and may append a bounded style
+  instruction. The mandatory native-language design remains operator-controlled.
+- The shipped defaults are `de` and `warm_female`; four languages and five profiles
+  are allowlisted.
+
 ## Fixed decisions
 
-- German only: protocol language `de`, Qwen language `German`.
-- Public voice only: `de_standard_01`; internal speaker begins as `Aiden`.
 - Models: Silero VAD, Parakeet TDT 0.6B v3, Gemma 4 31B IT, Qwen3-TTS 1.7B
-  CustomVoice.
+  VoiceDesign.
 - Internal transport: authenticated bounded WebSocket carrying JSON and PCM16.
 - Packaging: a small protocol library, the LiveKit plugin wheel, and the GPU service
   image.
@@ -53,6 +62,6 @@ slot to `idle`.
 
 ## Exclusions
 
-No UI, extra WebRTC stack, cloud model, tool calling, arbitrary voice/model
-selection, voice cloning, audio enhancement, production fake backend, silent
+No UI, extra WebRTC stack, cloud model, tool calling, arbitrary model selection,
+voice cloning, reference audio, audio enhancement, production fake backend, silent
 fallback, or runtime model download is part of version 1.

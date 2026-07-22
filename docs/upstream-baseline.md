@@ -66,9 +66,11 @@ priority for final jobs, and droppable opportunistic partials.
 
 `TTS/qwen3_tts_handler.py` loads Qwen3-TTS, consumes ordered text segments, streams
 audio chunks, and observes the cancellation generation. This project fixes
-`Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`, German, the public voice alias, and one
-shared non-reentrant runtime. It excludes reference audio, cloning/design, and
-client-selected speaker/path input.
+`Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` and one shared non-reentrant runtime while
+letting an operator map bounded public voice/language IDs to fixed design
+descriptions. It excludes reference audio, cloning, and raw client-selected
+descriptions or path input. This is a later product decision; the pinned upstream
+behavior analysis itself is unchanged.
 
 ### Upstream behavior intentionally excluded
 

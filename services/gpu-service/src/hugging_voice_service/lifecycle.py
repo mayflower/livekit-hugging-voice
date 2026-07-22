@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .auth import TokenAuthenticator
-from .config import ServiceSettings
+from .config import ServiceSettings, SpeechSettings
 from .llama_process import LlamaProcess, LlamaProcessState
 from .model_manifest import LockedModel, ModelLock, load_lock, verify_lock
 from .runtimes.gemma import GemmaRuntime
@@ -75,7 +75,7 @@ class ManagedGemma(Protocol):
 
 LlamaFactory = Callable[[Path, Path, ServiceSettings], ManagedLlama]
 ParakeetFactory = Callable[[Path], ManagedParakeet]
-QwenFactory = Callable[[Path, Path], ManagedQwen]
+QwenFactory = Callable[[Path, Path, SpeechSettings], ManagedQwen]
 GemmaFactory = Callable[[int, Callable[[], None]], ManagedGemma]
 CudaProbe = Callable[[], None]
 GpuMemoryProbe = Callable[[], int]
@@ -113,6 +113,22 @@ def _gemma_factory(port: int, violation: Callable[[], None]) -> GemmaRuntime:
     return GemmaRuntime(port=port, reasoning_violation=violation)
 
 
+def _qwen_factory(talker: Path, codec: Path, speech: SpeechSettings) -> QwenTTSRuntime:
+    language = speech.resolve_language(speech.default_language)
+    voice = speech.resolve_voice(speech.default_voice)
+    return QwenTTSRuntime(
+        talker,
+        codec,
+        warmup_language=language.model_language,
+        warmup_instructions=voice.render(language.model_language),
+        do_sample=speech.generation.do_sample,
+        temperature=speech.generation.temperature,
+        top_k=speech.generation.top_k,
+        top_p=speech.generation.top_p,
+        repetition_penalty=speech.generation.repetition_penalty,
+    )
+
+
 class ServiceLifecycle:
     """Create each expensive runtime once and expose readiness from real state."""
 
@@ -124,7 +140,7 @@ class ServiceLifecycle:
         cuda_probe: CudaProbe = _require_cuda,
         llama_factory: LlamaFactory = _llama_factory,
         parakeet_factory: ParakeetFactory = ParakeetRuntime,
-        qwen_factory: QwenFactory = QwenTTSRuntime,
+        qwen_factory: QwenFactory = _qwen_factory,
         gemma_factory: GemmaFactory = _gemma_factory,
         gpu_memory_probe: GpuMemoryProbe = _gpu_memory_bytes,
     ) -> None:
@@ -202,6 +218,7 @@ class ServiceLifecycle:
                 self.qwen = self._qwen_factory(
                     artifacts["qwen_talker"],
                     artifacts["qwen_codec"],
+                    self.settings.speech,
                 )
                 await asyncio.to_thread(self.qwen.load)
                 await asyncio.to_thread(self.qwen.warmup)
@@ -304,7 +321,7 @@ class ServiceLifecycle:
         required = {
             "google/gemma-4-31B-it",
             "nvidia/parakeet-tdt-0.6b-v3",
-            "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+            "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
             "silero-vad",
         }
         missing = required - models.keys()
@@ -314,11 +331,11 @@ class ServiceLifecycle:
             "gemma": self._only_file(models["google/gemma-4-31B-it"]),
             "parakeet": self._only_file(models["nvidia/parakeet-tdt-0.6b-v3"]),
             "qwen_talker": self._named_file(
-                models["Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"],
-                "qwen-talker-1.7b-customvoice-BF16.gguf",
+                models["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"],
+                "qwen-talker-1.7b-voicedesign-BF16.gguf",
             ),
             "qwen_codec": self._named_file(
-                models["Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"],
+                models["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"],
                 "qwen-tokenizer-12hz-BF16.gguf",
             ),
         }

@@ -17,6 +17,7 @@ from hugging_voice_protocol.events import (
 )
 from hugging_voice_service.cancellation import GenerationToken
 from hugging_voice_service.capacity import SessionSlot
+from hugging_voice_service.config import SpeechSettings
 from hugging_voice_service.pipeline import VoicePipeline
 from hugging_voice_service.runtimes.gemma import GemmaMessage, TextDelta, TextUsage
 from hugging_voice_service.runtimes.silero import SessionVAD
@@ -114,9 +115,11 @@ class TwoRoundGemma:
         *,
         messages: Sequence[GemmaMessage],
         instructions: str = "",
+        language_instruction: str = "",
+        system_prompt: str = "",
         max_tokens: int = 256,
     ) -> AsyncIterator[TextDelta | TextUsage]:
-        del messages, instructions, max_tokens
+        del messages, instructions, language_instruction, system_prompt, max_tokens
         self.calls += 1
         if self.calls == 1:
             self.first_started.set()
@@ -131,9 +134,11 @@ class ImmediateGemma:
         *,
         messages: Sequence[GemmaMessage],
         instructions: str = "",
+        language_instruction: str = "",
+        system_prompt: str = "",
         max_tokens: int = 256,
     ) -> AsyncIterator[TextDelta | TextUsage]:
-        del messages, instructions, max_tokens
+        del messages, instructions, language_instruction, system_prompt, max_tokens
         yield TextDelta("Hallo. ")
         yield TextUsage(prompt_tokens=2, completion_tokens=1, total_tokens=3)
 
@@ -167,6 +172,7 @@ async def test_cancel_before_first_token_then_new_generation_completes_cleanly()
         stt=UnusedSTT(),
         tts=ImmediateTTS(),
         gemma=gemma,
+        speech=SpeechSettings(),
         telemetry=ServiceTelemetry(),
     )
     await pipeline.handle_event(
@@ -214,6 +220,7 @@ async def test_cancel_while_tts_is_blocked_emits_one_terminal_lifecycle() -> Non
         stt=UnusedSTT(),
         tts=tts,
         gemma=ImmediateGemma(),
+        speech=SpeechSettings(),
         telemetry=ServiceTelemetry(),
     )
     await pipeline.handle_event(
@@ -247,6 +254,7 @@ async def test_vad_barge_in_preserves_the_barge_in_terminal_reason() -> None:
         stt=UnusedSTT(),
         tts=ImmediateTTS(),
         gemma=gemma,
+        speech=SpeechSettings(),
         telemetry=ServiceTelemetry(),
     )
     await pipeline.handle_event(

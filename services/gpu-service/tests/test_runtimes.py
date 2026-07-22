@@ -111,7 +111,7 @@ class FakeQwenModel:
         assert prefill_len == 100
         self.warmups += 1
 
-    def generate_custom_voice_streaming(
+    def generate_voice_design_streaming(
         self, **kwargs: Any
     ) -> Iterator[tuple[np.ndarray[Any, Any], int, dict[str, Any]]]:
         self.calls.append(kwargs)
@@ -120,7 +120,7 @@ class FakeQwenModel:
 
 
 @pytest.mark.asyncio
-async def test_qwen_enforces_voice_and_emits_exact_pcm_frames(tmp_path: Path) -> None:
+async def test_qwen_forwards_speech_options_and_emits_exact_pcm_frames(tmp_path: Path) -> None:
     talker = tmp_path / "talker.gguf"
     codec = tmp_path / "codec.gguf"
     talker.write_bytes(b"talker")
@@ -135,20 +135,24 @@ async def test_qwen_enforces_voice_and_emits_exact_pcm_frames(tmp_path: Path) ->
     runtime.load()
     runtime.warmup()
     assert runtime.load_count == 1
-    frames = [frame async for frame in runtime.stream_pcm16_frames("Guten Tag.")]
+    frames = [
+        frame
+        async for frame in runtime.stream_pcm16_frames(
+            "Hello.",
+            language="English",
+            instructions="Speak warmly.",
+        )
+    ]
     assert [len(frame) for frame in frames] == [OUTPUT_FRAME_BYTES, OUTPUT_FRAME_BYTES]
     call = model.calls[-1]
-    assert call["speaker"] == "Aiden"
-    assert call["language"] == "German"
-    assert "Hochdeutsch" in call["instruct"]
-    with pytest.raises(ValueError, match="unsupported voice"):
-        _ = [
-            frame
-            async for frame in runtime.stream_pcm16_frames(
-                "Text",
-                voice="another_voice",
-            )
-        ]
+    assert "speaker" not in call
+    assert call["language"] == "English"
+    assert call["instruct"] == "Speak warmly."
+    assert call["do_sample"] is False
+    assert call["temperature"] == 0.9
+    assert call["top_k"] == 50
+    assert call["top_p"] == 1.0
+    assert call["repetition_penalty"] == 1.05
 
 
 @pytest.mark.asyncio
@@ -200,7 +204,7 @@ async def test_gemma_suppresses_reasoning_and_disables_thinking_in_request() -> 
     assert runtime.reasoning_violations == 1
     assert received[0]["chat_template_kwargs"] == {"enable_thinking": False}
     assert received[0]["messages"][0]["role"] == "system"
-    assert "verborgene Analyse" in received[0]["messages"][0]["content"]
+    assert "hidden analysis" in received[0]["messages"][0]["content"]
 
 
 @pytest.mark.asyncio

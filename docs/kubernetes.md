@@ -40,6 +40,9 @@ kubectl apply -k deploy/kubernetes/overlays/demo
 ```
 
 The demo is one `Recreate` pod and at most two sessions. It has no PDB or HPA.
+The base ConfigMap's `speech` section defines the public language and voice IDs,
+their Qwen mappings, the response-language instructions, and default speaking
+styles. Update that ConfigMap and roll the pod to change the deployment catalog.
 
 Production starts as an explicit three-replica example with preferred node
 anti-affinity. Set the immutable registry/digest and a replica count no larger

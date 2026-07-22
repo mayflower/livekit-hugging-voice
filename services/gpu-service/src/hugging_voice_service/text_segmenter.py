@@ -1,4 +1,4 @@
-"""Small deterministic German-aware visible-text segmenter for TTS."""
+"""Small deterministic visible-text segmenter for multilingual TTS."""
 
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ _ABBREVIATIONS = {
     "u.a.",
     "usw.",
     "z.b.",
+    "e.g.",
+    "i.e.",
+    "mr.",
+    "mrs.",
+    "ms.",
 }
 
 

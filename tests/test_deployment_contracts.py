@@ -104,6 +104,20 @@ def test_compose_secret_is_readable_by_fixed_non_root_users() -> None:
     assert "mode" not in agent["secrets"][0]
 
 
+def test_livekit_demo_exposes_web_ui_and_real_rtc_ports() -> None:
+    services = load_yaml("deploy/docker/compose.livekit.yaml")["services"]
+    livekit = services["livekit"]
+    web = services["web"]
+    assert "${LIVEKIT_BIND_ADDRESS:-127.0.0.1}:7880:7880" in livekit["ports"]
+    assert "${LIVEKIT_RTC_BIND_ADDRESS:-0.0.0.0}:7881:7881" in livekit["ports"]
+    assert "${LIVEKIT_RTC_BIND_ADDRESS:-0.0.0.0}:7882:7882/udp" in livekit["ports"]
+    assert web["entrypoint"] == ["python", "/app/web.py"]
+    assert web["ports"] == [
+        "${HUGGING_VOICE_WEB_BIND_ADDRESS:-127.0.0.1}:${HUGGING_VOICE_WEB_PORT:-3000}:3000"
+    ]
+    assert web["environment"]["LIVEKIT_INTERNAL_URL"] == "ws://livekit:7880"
+
+
 def test_compose_mounts_model_root_and_generated_lock_read_only() -> None:
     service = load_yaml("deploy/docker/compose.yaml")["services"]["hugging-voice"]
     mounts = {item["target"]: item for item in service["volumes"]}

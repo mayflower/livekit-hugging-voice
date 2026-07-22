@@ -2,10 +2,12 @@ services:
   livekit:
     image: livekit/livekit-server:v1.13.4
     command: ["--dev", "--bind", "0.0.0.0"]
+    environment:
+      NODE_IP: ${LIVEKIT_NODE_IP:-}
     ports:
-      - "127.0.0.1:7880:7880"
-      - "127.0.0.1:7881:7881"
-      - "50000-50100:50000-50100/udp"
+      - "${LIVEKIT_BIND_ADDRESS:-127.0.0.1}:7880:7880"
+      - "${LIVEKIT_RTC_BIND_ADDRESS:-0.0.0.0}:7881:7881"
+      - "${LIVEKIT_RTC_BIND_ADDRESS:-0.0.0.0}:7882:7882/udp"
 
   agent:
     image: livekit-hugging-voice-agent:local
@@ -18,6 +20,10 @@ services:
       LIVEKIT_API_SECRET: secret
       HUGGING_VOICE_BASE_URL: ws://hugging-voice:8765/v1/realtime
       HUGGING_VOICE_TOKEN_FILE: /run/secrets/hugging_voice_token
+      HUGGING_VOICE_LANGUAGE: ${HUGGING_VOICE_LANGUAGE:-}
+      HUGGING_VOICE_VOICE: ${HUGGING_VOICE_VOICE:-}
+      HUGGING_VOICE_VOICE_INSTRUCTIONS: ${HUGGING_VOICE_VOICE_INSTRUCTIONS:-}
+      HUGGING_VOICE_AGENT_NAME: ${HUGGING_VOICE_AGENT_NAME:-hugging-voice}
     secrets:
       - source: hugging_voice_token
         target: hugging_voice_token
@@ -31,3 +37,27 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m,uid=10001,gid=10001
+
+  web:
+    image: livekit-hugging-voice-agent:local
+    build:
+      context: ../..
+      dockerfile: examples/minimal-livekit-agent/Dockerfile
+    entrypoint: ["python", "/app/web.py"]
+    command: []
+    ports:
+      - "${HUGGING_VOICE_WEB_BIND_ADDRESS:-127.0.0.1}:${HUGGING_VOICE_WEB_PORT:-3000}:3000"
+    environment:
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+      LIVEKIT_INTERNAL_URL: ws://livekit:7880
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}
+      HUGGING_VOICE_AGENT_NAME: ${HUGGING_VOICE_AGENT_NAME:-hugging-voice}
+    depends_on:
+      livekit:
+        condition: service_started
+      agent:
+        condition: service_started
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=10001,gid=10001

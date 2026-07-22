@@ -7,7 +7,7 @@ commit and allowlists every required file. It currently selects
 pinned `silero-vad==6.2.1` package. Parakeet is delivered as the exact `.nemo`
 checkpoint consumed by the local `nano-parakeet` loader. Qwen uses exact BF16
 talker and 12 Hz codec GGUF conversions from `Serveurperso/Qwen3-TTS-GGUF`; the
-logical model remains `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`.
+logical model is `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
 
 ## Prefetch
 

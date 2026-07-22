@@ -10,7 +10,7 @@ services:
         LLAMA_CPP_COMMIT: 3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
         VCS_REF: ${VCS_REF:-local}
     ports:
-      - "127.0.0.1:${HUGGING_VOICE_PORT:-8765}:8765"
+      - "${HUGGING_VOICE_BIND_ADDRESS:-127.0.0.1}:${HUGGING_VOICE_PORT:-8765}:8765"
     environment:
       HV_SERVER__MAX_SESSIONS: "2"
       HV_MODELS__LOCK_FILE: /etc/hugging-voice/manifest.lock.json

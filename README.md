@@ -1,6 +1,6 @@
 # livekit-hugging-voice
 
-`livekit-hugging-voice` is a local, GPU-hosted German speech-to-speech service and
+`livekit-hugging-voice` is a local, GPU-hosted multilingual speech-to-speech service and
 a native LiveKit Agents realtime-model plugin. The intended path is:
 
 ```text
@@ -10,13 +10,15 @@ LiveKit Agent
   -> Silero VAD
   -> nvidia/parakeet-tdt-0.6b-v3
   -> google/gemma-4-31B-it through a local llama-server
-  -> Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
-  -> 24 kHz PCM16 German audio
+  -> Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  -> 24 kHz PCM16 audio in the configured language and voice
 ```
 
-The service is deliberately not a generic voice platform. A GPU pod will admit at
+The service is deliberately not a generic model platform. A GPU pod will admit at
 most two isolated sessions while loading Parakeet, Gemma, and Qwen exactly once.
-The public language and voice are fixed to `de` and `de_standard_01`.
+Language codes and public voice profiles are configured by the operator and selected
+per session. The shipped catalog exposes German, English, French, and Italian plus
+five fixed VoiceDesign profiles; `de` and `warm_female` are the defaults.
 
 ## Status
 
@@ -62,9 +64,16 @@ docker compose \
 curl --fail http://127.0.0.1:8765/health/ready
 ```
 
-The final command starts the GPU service, pinned LiveKit development server, and
-minimal worker. The worker registers as `hugging-voice-german` against
-`ws://127.0.0.1:7880`. No browser UI is included.
+The final command starts the GPU service, pinned LiveKit development server,
+minimal worker, and browser voice demo. Open <http://127.0.0.1:3000>, select a
+language and voice, and grant microphone access. The web server creates a private
+room with an explicit dispatch to the `hugging-voice` worker; speech choices are
+carried in that dispatch and apply only to that room.
+
+Browser microphone access requires a secure context. Loopback is accepted for
+local development; a UI exposed to another machine needs a trusted HTTPS endpoint.
+See [`docs/docker.md`](docs/docker.md) for bind addresses, LiveKit media ports, and
+remote-access guidance.
 
 To run a real native-agent speech smoke, provide an uncompressed mono 16 kHz PCM16
 WAV file:
@@ -82,6 +91,31 @@ Stop the complete local stack with `make docker-down`. Configuration and
 operational details are in
 [`docs/docker.md`](docs/docker.md), [`docs/kubernetes.md`](docs/kubernetes.md), and
 [`docs/operations.md`](docs/operations.md).
+
+## Speech configuration
+
+The service config owns the allowed language and voice maps. Public language codes
+map to Qwen language names plus an LLM response instruction; public voice IDs map to
+fixed VoiceDesign descriptions rendered for the selected native language. Edit
+`services/gpu-service/config/default.yaml` for Docker-image defaults or the
+Kubernetes ConfigMap for a deployment. `HV_SPEECH__DEFAULT_LANGUAGE` and
+`HV_SPEECH__DEFAULT_VOICE` can override the two scalar defaults.
+
+Each `RealtimeModel` selects a configured pair:
+
+```python
+RealtimeModel(
+    language="en",
+    voice="warm_female",
+    voice_instructions="Speak warmly and at a relaxed pace.",
+)
+```
+
+Omit `voice_instructions` to use the operator-configured voice default. The service
+advertises its accepted IDs in `session.created.supported_languages` and
+`supported_voices` and rejects unknown IDs during `session.update`. Omitting
+`language` or `voice` inherits the service defaults, so changing those defaults
+does not require a client-code change.
 
 ## Development
 

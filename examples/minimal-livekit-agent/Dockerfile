@@ -14,6 +14,8 @@ RUN groupadd --gid 10001 agent \
         --shell /usr/sbin/nologin agent
 COPY --from=builder /opt/venv /opt/venv
 COPY examples/minimal-livekit-agent/agent.py /app/agent.py
+COPY examples/minimal-livekit-agent/web.py /app/web.py
+COPY examples/minimal-livekit-agent/static /app/static
 ENV PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin PYTHONUNBUFFERED=1
 USER 10001:10001
 ENTRYPOINT ["python", "/app/agent.py"]

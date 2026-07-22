@@ -62,17 +62,22 @@ class TestParakeet:
 
 
 class TestQwen:
+    __test__ = False
     load_count = 1
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
 
     async def stream_pcm16_frames(
         self,
         text: str,
         *,
-        voice: str,
+        language: str,
+        instructions: str,
         cancelled: Callable[[], bool],
     ) -> AsyncIterator[bytes]:
         assert text.strip()
-        assert voice == "de_standard_01"
+        self.calls.append((language, instructions))
         if not cancelled():
             yield bytes(960)
 
@@ -87,14 +92,22 @@ class TestQwen:
 
 
 class TestGemma:
+    __test__ = False
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
     async def stream_response(
         self,
         *,
         messages: list[GemmaMessage],
         instructions: str = "",
+        language_instruction: str = "",
+        system_prompt: str = "",
         max_tokens: int = 256,
     ) -> AsyncIterator[TextDelta | TextUsage]:
         del instructions, max_tokens
+        self.calls.append((language_instruction, system_prompt))
         assert messages[-1].content == "Hallo"
         yield TextDelta("Guten Tag. ")
         yield TextUsage(prompt_tokens=3, completion_tokens=2, total_tokens=5)
@@ -112,9 +125,11 @@ class CanaryGemma(TestGemma):
         *,
         messages: list[GemmaMessage],
         instructions: str = "",
+        language_instruction: str = "",
+        system_prompt: str = "",
         max_tokens: int = 256,
     ) -> AsyncIterator[TextDelta | TextUsage]:
-        del instructions, max_tokens
+        del instructions, language_instruction, system_prompt, max_tokens
         canary = messages[-1].content
         if "ALPHA" in canary:
             await asyncio.sleep(0.1)
@@ -183,7 +198,7 @@ def make_ready_service(tmp_path: Path, *, gemma: TestGemma | None = None) -> Rea
         models=(
             locked_model("google/gemma-4-31B-it"),
             locked_model("nvidia/parakeet-tdt-0.6b-v3"),
-            locked_model("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"),
+            locked_model("Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"),
             locked_model("silero-vad", package=True),
         )
     )
@@ -251,7 +266,7 @@ def send_context_and_response(websocket: Any, session_id: str, canary: str) -> N
 
 def receive_through_done(websocket: Any, initial: list[dict[str, Any]]) -> list[dict[str, Any]]:
     events = initial
-    while events[-1]["type"] != "response.done":
+    while not events or events[-1]["type"] != "response.done":
         events.append(websocket.receive_json())
     return events
 
@@ -340,6 +355,51 @@ def test_authenticated_handshake_and_complete_text_audio_response(tmp_path: Path
             assert events[-1]["status"] == "completed"
             assert events[-1]["usage"]["total_text_tokens"] == 5
             assert events[3]["sequence"] == 0
+
+
+def test_session_speech_configuration_reaches_llm_and_tts(tmp_path: Path) -> None:
+    gemma = TestGemma()
+    service = make_ready_service(tmp_path, gemma=gemma)
+    qwen = service.lifecycle.qwen
+    assert isinstance(qwen, TestQwen)
+    with TestClient(make_test_app(service)) as client:
+        with client.websocket_connect(
+            "/v1/realtime",
+            headers=headers(),
+            subprotocols=["hugging-voice-livekit.v1"],
+        ) as websocket:
+            created = websocket.receive_json()
+            assert created["supported_languages"] == ["de", "en", "fr", "it"]
+            assert created["supported_voices"] == [
+                "clear_female",
+                "clear_male",
+                "friendly_neutral",
+                "warm_female",
+                "warm_male",
+            ]
+            session_id = created["session_id"]
+            websocket.send_json(
+                {
+                    "type": "session.update",
+                    "event_id": "evt_options",
+                    "protocol_version": 1,
+                    "session_id": session_id,
+                    "session": {
+                        "language": "en",
+                        "voice": "warm_female",
+                        "voice_instructions": "Speak warmly.",
+                    },
+                }
+            )
+            send_context_and_response(websocket, session_id, "Hallo")
+            receive_through_done(websocket, [])
+
+    assert gemma.calls[-1][0] == "Respond in clear, natural English."
+    language, design = qwen.calls[-1]
+    assert language == "English"
+    assert "native English speaker" in design
+    assert "Delivery style only: Speak warmly." in design
+    assert design.endswith("The delivery style must not alter the speaker identity.")
 
 
 def test_auth_and_subprotocol_fail_before_any_capacity_claim(tmp_path: Path) -> None:

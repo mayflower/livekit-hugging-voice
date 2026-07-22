@@ -43,13 +43,11 @@ def load_client(name: str) -> dict[str, object]:
 @pytest.mark.parametrize(
     ("path", "value"),
     [
-        (("session", "voice"), "arbitrary_voice"),
-        (("session", "language"), "en"),
         (("session", "input_audio_format", "sample_rate"), 48_000),
         (("session", "output_audio_format", "sample_rate"), 16_000),
     ],
 )
-def test_session_update_rejects_fixed_contract_changes(
+def test_session_update_rejects_fixed_audio_contract_changes(
     path: tuple[str, ...], value: object
 ) -> None:
     payload = load_client("client_session_update.json")
@@ -57,6 +55,41 @@ def test_session_update_rejects_fixed_contract_changes(
     for key in path[:-1]:
         target = target[key]  # type: ignore[assignment]
     target[path[-1]] = value
+    with pytest.raises(ValidationError):
+        CLIENT_EVENT_ADAPTER.validate_python(payload)
+
+
+def test_session_update_accepts_valid_language_voice_and_style() -> None:
+    payload = load_client("client_session_update.json")
+    session = payload["session"]
+    assert isinstance(session, dict)
+    session.update(
+        language="en-US",
+        voice="clear_female",
+        voice_instructions="Speak warmly and at a relaxed pace.",
+    )
+    event = CLIENT_EVENT_ADAPTER.validate_python(payload)
+    assert event.session.language == "en-US"  # type: ignore[union-attr]
+    assert event.session.voice == "clear_female"  # type: ignore[union-attr]
+
+
+def test_omitted_speech_options_defer_to_server_defaults() -> None:
+    payload = load_client("client_session_update.json")
+    session = payload["session"]
+    assert isinstance(session, dict)
+    session.pop("language")
+    session.pop("voice")
+    event = CLIENT_EVENT_ADAPTER.validate_python(payload)
+    assert event.session.language is None  # type: ignore[union-attr]
+    assert event.session.voice is None  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(("field", "value"), [("language", "../en"), ("voice", "bad voice")])
+def test_session_update_rejects_unsafe_speech_identifiers(field: str, value: str) -> None:
+    payload = load_client("client_session_update.json")
+    session = payload["session"]
+    assert isinstance(session, dict)
+    session[field] = value
     with pytest.raises(ValidationError):
         CLIENT_EVENT_ADAPTER.validate_python(payload)
 

@@ -93,12 +93,15 @@ async def test_real_german_stt_gemma_and_tts_smoke() -> None:
 
         assert lifecycle.qwen is not None
         tts = cast(TTSRuntime, lifecycle.qwen)
+        language = settings.speech.resolve_language(settings.speech.default_language)
+        voice = settings.speech.resolve_voice(settings.speech.default_voice)
         frames: list[bytes] = []
         segmenter = SpeechTextSegmenter()
         for segment in segmenter.feed(visible) + segmenter.flush():
             async for frame in tts.stream_pcm16_frames(
                 segment,
-                voice="de_standard_01",
+                language=language.model_language,
+                instructions=voice.render(language.model_language),
                 cancelled=lambda: False,
             ):
                 frames.append(frame)

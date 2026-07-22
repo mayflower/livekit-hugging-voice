@@ -1,4 +1,4 @@
-"""One shared Qwen3-TTS GGML/CUDA runtime with fixed German voice policy."""
+"""One shared configurable Qwen3-TTS GGML/CUDA runtime."""
 
 from __future__ import annotations
 
@@ -9,19 +9,16 @@ from typing import Any, Protocol, cast
 
 from hugging_voice_protocol.audio import OUTPUT_FRAME_BYTES, OUTPUT_SAMPLE_RATE
 
-PUBLIC_VOICE = "de_standard_01"
-QWEN_SPEAKER = "Aiden"
-QWEN_LANGUAGE = "German"
-QWEN_INSTRUCTION = (
-    "Sprich in klarem, ruhigem Hochdeutsch. Natürlich, freundlich und professionell. "
-    "Keine übertriebene Emotionalität."
+DEFAULT_LANGUAGE = "German"
+DEFAULT_INSTRUCTIONS = (
+    "A warm adult female native German speaker with authentic pronunciation and no foreign accent."
 )
 
 
 class QwenModel(Protocol):
     def warmup(self, *, prefill_len: int = 100) -> None: ...
 
-    def generate_custom_voice_streaming(
+    def generate_voice_design_streaming(
         self, **kwargs: Any
     ) -> Iterator[tuple[Any, int, dict[str, Any]]]: ...
 
@@ -57,10 +54,7 @@ def _next_item(iterator: Iterator[Any]) -> tuple[bool, Any | None]:
 
 
 class QwenTTSRuntime:
-    model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
-    public_voice = PUBLIC_VOICE
-    speaker = QWEN_SPEAKER
-    language = QWEN_LANGUAGE
+    model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
     sample_rate = OUTPUT_SAMPLE_RATE
 
     def __init__(
@@ -70,11 +64,25 @@ class QwenTTSRuntime:
         *,
         model_factory: QwenFactory = _load_local_model,
         cuda_probe: Callable[[], None] = _require_cuda,
+        warmup_language: str = DEFAULT_LANGUAGE,
+        warmup_instructions: str = DEFAULT_INSTRUCTIONS,
+        do_sample: bool = False,
+        temperature: float = 0.9,
+        top_k: int = 50,
+        top_p: float = 1.0,
+        repetition_penalty: float = 1.05,
     ) -> None:
         self._talker_path = talker_path
         self._codec_path = codec_path
         self._model_factory = model_factory
         self._cuda_probe = cuda_probe
+        self._warmup_language = warmup_language
+        self._warmup_instructions = warmup_instructions
+        self._do_sample = do_sample
+        self._temperature = temperature
+        self._top_k = top_k
+        self._top_p = top_p
+        self._repetition_penalty = repetition_penalty
         self._model: QwenModel | None = None
         self.load_count = 0
 
@@ -92,7 +100,11 @@ class QwenTTSRuntime:
         if self._model is None:
             raise RuntimeError("Qwen3-TTS runtime is not loaded")
         self._model.warmup(prefill_len=100)
-        iterator = self._raw_stream("Hallo.")
+        iterator = self._raw_stream(
+            "Hallo.",
+            language=self._warmup_language,
+            instructions=self._warmup_instructions,
+        )
         try:
             chunk, sample_rate, _timing = next(iterator)
         except StopIteration as exc:
@@ -104,14 +116,17 @@ class QwenTTSRuntime:
         self,
         text: str,
         *,
-        voice: str = PUBLIC_VOICE,
+        language: str,
+        instructions: str,
         cancelled: Callable[[], bool] = lambda: False,
     ) -> AsyncIterator[bytes]:
-        if voice != self.public_voice:
-            raise ValueError(f"unsupported voice {voice!r}; expected {self.public_voice!r}")
         if not text.strip():
             return
-        iterator = self._raw_stream(text)
+        iterator = self._raw_stream(
+            text,
+            language=language,
+            instructions=instructions,
+        )
         remainder = bytearray()
         while not cancelled():
             has_item, item = await asyncio.to_thread(_next_item, iterator)
@@ -137,16 +152,26 @@ class QwenTTSRuntime:
     def close(self) -> None:
         self._model = None
 
-    def _raw_stream(self, text: str) -> Iterator[tuple[Any, int, dict[str, Any]]]:
+    def _raw_stream(
+        self,
+        text: str,
+        *,
+        language: str,
+        instructions: str,
+    ) -> Iterator[tuple[Any, int, dict[str, Any]]]:
         if self._model is None:
             raise RuntimeError("Qwen3-TTS runtime is not loaded")
-        return self._model.generate_custom_voice_streaming(
+        return self._model.generate_voice_design_streaming(
             text=text,
-            speaker=self.speaker,
-            language=self.language,
-            instruct=QWEN_INSTRUCTION,
+            language=language,
+            instruct=instructions,
             chunk_size=12,
             max_new_tokens=2_048,
+            do_sample=self._do_sample,
+            temperature=self._temperature,
+            top_k=self._top_k,
+            top_p=self._top_p,
+            repetition_penalty=self._repetition_penalty,
         )
 
     @staticmethod

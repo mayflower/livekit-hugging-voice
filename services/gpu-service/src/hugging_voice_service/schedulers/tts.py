@@ -19,7 +19,8 @@ class TTSRuntime(Protocol):
         self,
         text: str,
         *,
-        voice: str,
+        language: str,
+        instructions: str,
         cancelled: Callable[[], bool],
     ) -> AsyncIterator[bytes]: ...
 
@@ -32,7 +33,8 @@ class SchedulerFullError(RuntimeError):
 class TTSJob:
     token: GenerationToken
     text: str
-    voice: str
+    language: str
+    instructions: str
     is_current: Callable[[], bool]
     on_frame: Callable[[bytes], Awaitable[None]]
     enqueued_at: float = field(default_factory=time.monotonic)
@@ -131,7 +133,8 @@ class TTSScheduler:
                 if job.is_current():
                     async for frame in self._runtime.stream_pcm16_frames(
                         job.text,
-                        voice=job.voice,
+                        language=job.language,
+                        instructions=job.instructions,
                         cancelled=partial(_job_cancelled, job),
                     ):
                         if not job.is_current():

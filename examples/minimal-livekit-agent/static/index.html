@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hugging Voice</title>
+    <script
+      src="https://cdn.jsdelivr.net/npm/livekit-client@2.20.2/dist/livekit-client.umd.min.js"
+      integrity="sha384-qbqEcU5thA3okJYaeKhyVTz7XGlrhCR6DyHf3LBIWXzYuqfh6Rn0wCizDWh6zY0O"
+      crossorigin="anonymous"
+    ></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+        background: #0b0d12;
+        color: #f4f7fb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 20% 10%, #23335f 0, transparent 34rem),
+          radial-gradient(circle at 90% 90%, #143d34 0, transparent 30rem),
+          #0b0d12;
+      }
+      main {
+        width: min(720px, calc(100% - 28px));
+        margin: 28px auto;
+        padding: clamp(24px, 5vw, 48px);
+        border: 1px solid #ffffff1f;
+        border-radius: 28px;
+        background: #11151de8;
+        box-shadow: 0 30px 80px #0009;
+        backdrop-filter: blur(18px);
+      }
+      h1 { margin: 0; font-size: clamp(2rem, 7vw, 4rem); letter-spacing: -0.06em; }
+      .lede { color: #aeb8c8; margin: 10px 0 28px; }
+      .orb-wrap { display: grid; place-items: center; min-height: 190px; }
+      .orb {
+        width: 132px;
+        aspect-ratio: 1;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 30%, #fff, #7cc8ff 18%, #7566ff 52%, #272044 72%);
+        box-shadow: 0 0 70px #7067ff70;
+        transition: transform 180ms ease, filter 180ms ease;
+      }
+      .orb.listening { transform: scale(1.08); filter: saturate(1.2); }
+      .orb.speaking { animation: speak 700ms ease-in-out infinite alternate; }
+      @keyframes speak { to { transform: scale(1.14); box-shadow: 0 0 100px #58e0b990; } }
+      .status { text-align: center; color: #cbd4e2; min-height: 24px; }
+      .warning { color: #ffc780; background: #3c2918; border-radius: 12px; padding: 12px; margin: 14px 0; }
+      .hidden { display: none !important; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      label { display: grid; gap: 7px; color: #b8c2d2; font-size: 0.88rem; }
+      label.wide { grid-column: 1 / -1; }
+      select, input {
+        width: 100%;
+        border: 1px solid #ffffff20;
+        border-radius: 12px;
+        padding: 11px 12px;
+        background: #090c12;
+        color: inherit;
+        font: inherit;
+      }
+      .controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 22px; }
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 12px 20px;
+        background: #f4f7fb;
+        color: #11151d;
+        font-weight: 750;
+        cursor: pointer;
+      }
+      button.secondary { background: #272d39; color: #f4f7fb; }
+      button.danger { background: #4b2229; color: #ffdce1; }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .transcript { margin-top: 26px; display: grid; gap: 10px; max-height: 260px; overflow: auto; }
+      .line { padding: 12px 14px; border-radius: 14px; background: #ffffff0c; }
+      .line strong { display: block; color: #8fdac4; font-size: 0.78rem; margin-bottom: 3px; }
+      footer { margin-top: 24px; color: #7f8999; font-size: 0.78rem; text-align: center; }
+      #remote-audio { display: none; }
+      @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hugging Voice</h1>
+      <p class="lede">A small LiveKit room connected to the local multilingual voice service.</p>
+      <div id="secure-warning" class="warning hidden"></div>
+      <div class="orb-wrap"><div id="orb" class="orb"></div></div>
+      <div id="status" class="status">Ready to connect</div>
+
+      <section id="options" class="grid">
+        <label>Language
+          <select id="language">
+            <option value="">Service default</option>
+            <option value="de">German</option><option value="en">English</option>
+            <option value="fr">French</option><option value="it">Italian</option>
+          </select>
+        </label>
+        <label>Voice
+          <select id="voice">
+            <option value="">Service default</option>
+            <option value="warm_female">Warm female</option>
+            <option value="clear_female">Clear female</option>
+            <option value="warm_male">Warm male</option>
+            <option value="clear_male">Clear male</option>
+            <option value="friendly_neutral">Friendly neutral</option>
+          </select>
+        </label>
+        <label class="wide">Speaking style (optional)
+          <input id="voice-instructions" maxlength="2000" placeholder="Speak warmly and at a relaxed pace." />
+        </label>
+      </section>
+
+      <div class="controls">
+        <button id="connect">Start conversation</button>
+        <button id="mute" class="secondary hidden">Mute microphone</button>
+        <button id="resume" class="secondary hidden">Enable sound</button>
+        <button id="disconnect" class="danger hidden">End</button>
+      </div>
+      <div id="transcript" class="transcript" aria-live="polite"></div>
+      <div id="remote-audio"></div>
+      <footer>Microphone audio travels to the agent over LiveKit WebRTC.</footer>
+    </main>
+
+    <script>
+      const { Room, RoomEvent, Track } = LivekitClient;
+      const statusEl = document.querySelector('#status');
+      const orb = document.querySelector('#orb');
+      const connectButton = document.querySelector('#connect');
+      const muteButton = document.querySelector('#mute');
+      const resumeButton = document.querySelector('#resume');
+      const disconnectButton = document.querySelector('#disconnect');
+      const options = document.querySelector('#options');
+      const transcript = document.querySelector('#transcript');
+      const warning = document.querySelector('#secure-warning');
+      const audioHost = document.querySelector('#remote-audio');
+      let room;
+      let muted = false;
+      const transcriptLines = new Map();
+
+      if (!window.isSecureContext && !['localhost', '127.0.0.1'].includes(location.hostname)) {
+        warning.textContent = 'This page is not a secure browser context. Open it through HTTPS or an SSH localhost tunnel to enable microphone access.';
+        warning.classList.remove('hidden');
+      }
+
+      function setStatus(text) { statusEl.textContent = text; }
+      function showConnected(connected) {
+        connectButton.classList.toggle('hidden', connected);
+        muteButton.classList.toggle('hidden', !connected);
+        disconnectButton.classList.toggle('hidden', !connected);
+        options.classList.toggle('hidden', connected);
+      }
+      function upsertTranscript(id, speaker, text, final) {
+        let line = transcriptLines.get(id);
+        if (!line) {
+          line = document.createElement('div');
+          line.className = 'line';
+          line.innerHTML = '<strong></strong><span></span>';
+          transcript.prepend(line);
+          transcriptLines.set(id, line);
+        }
+        line.querySelector('strong').textContent = speaker;
+        line.querySelector('span').textContent = text + (final ? '' : ' …');
+      }
+
+      function configureRoom() {
+        room = new Room({ adaptiveStream: true, dynacast: true });
+        room.registerTextStreamHandler('lk.transcription', async (reader, participantInfo) => {
+          const text = await reader.readAll();
+          const attrs = reader.info.attributes || {};
+          const id = attrs['lk.segment_id'] || reader.info.id;
+          const final = attrs['lk.transcription_final'] === 'true';
+          const speaker = participantInfo.identity === room.localParticipant.identity ? 'You' : 'Agent';
+          upsertTranscript(id, speaker, text, final);
+        });
+        room.on(RoomEvent.TrackSubscribed, (track) => {
+          if (track.kind === Track.Kind.Audio) audioHost.appendChild(track.attach());
+        });
+        room.on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()));
+        room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+          const active = speakers[0];
+          orb.classList.toggle('listening', active?.identity === room.localParticipant.identity);
+          orb.classList.toggle('speaking', Boolean(active && active.identity !== room.localParticipant.identity));
+          if (active) setStatus(active.identity === room.localParticipant.identity ? 'Listening…' : 'Agent speaking…');
+        });
+        room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+          resumeButton.classList.toggle('hidden', room.canPlaybackAudio);
+        });
+        room.on(RoomEvent.Reconnecting, () => setStatus('Reconnecting…'));
+        room.on(RoomEvent.Reconnected, () => setStatus('Connected'));
+        room.on(RoomEvent.Disconnected, () => {
+          setStatus('Disconnected'); showConnected(false); orb.className = 'orb';
+        });
+      }
+
+      connectButton.addEventListener('click', async () => {
+        connectButton.disabled = true;
+        try {
+          if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone access requires HTTPS or localhost.');
+          setStatus('Creating a private room…');
+          const response = await fetch('/api/join', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              language: document.querySelector('#language').value || null,
+              voice: document.querySelector('#voice').value || null,
+              voice_instructions: document.querySelector('#voice-instructions').value || null,
+            }),
+          });
+          if (!response.ok) throw new Error(await response.text());
+          const credentials = await response.json();
+          configureRoom();
+          setStatus('Connecting to LiveKit…');
+          await room.connect(credentials.server_url, credentials.participant_token);
+          await room.startAudio();
+          await room.localParticipant.setMicrophoneEnabled(true, { echoCancellation: true, noiseSuppression: true });
+          muted = false; muteButton.textContent = 'Mute microphone';
+          showConnected(true); setStatus('Connected — start talking');
+        } catch (error) {
+          console.error(error); setStatus(error.message || 'Unable to connect');
+          if (room) await room.disconnect();
+        } finally { connectButton.disabled = false; }
+      });
+      muteButton.addEventListener('click', async () => {
+        muted = !muted;
+        await room.localParticipant.setMicrophoneEnabled(!muted);
+        muteButton.textContent = muted ? 'Unmute microphone' : 'Mute microphone';
+        setStatus(muted ? 'Microphone muted' : 'Connected — start talking');
+      });
+      resumeButton.addEventListener('click', async () => { await room.startAudio(); });
+      disconnectButton.addEventListener('click', async () => { if (room) await room.disconnect(); });
+      window.addEventListener('beforeunload', () => room?.disconnect());
+    </script>
+  </body>
+</html>

@@ -48,17 +48,76 @@ curl --fail http://127.0.0.1:8765/health/live
 curl --fail http://127.0.0.1:8765/health/ready
 ```
 
+The service binds to loopback by default. To expose its authenticated HTTP and
+WebSocket endpoint on the host network, start Compose with
+`HUGGING_VOICE_BIND_ADDRESS=0.0.0.0`; use `HUGGING_VOICE_PORT` to select the
+published TCP port. Do not expose it without the mounted bearer-token secret.
+
 The build verifies and compiles llama.cpp commit
 `3ce7da2c852c538c4c5f9806da27029cf8c9cc4a`. The runtime image has CUDA/CuDNN,
 Python 3.11, the frozen GPU environment, and the one `llama-server` binary, but no
 compiler, Git checkout, model weights, or supervisor. The Python ASGI service is
 PID 1 and owns child shutdown. `llama-server` binds only to loopback.
 
-Start the pinned LiveKit development server and minimal worker without a Web UI:
+Start the pinned LiveKit development server, minimal worker, and browser voice UI:
 
 ```bash
 make demo-agent
 ```
+
+Open <http://127.0.0.1:3000>, choose the language and voice, and select **Start
+conversation**. The page asks its same-origin token endpoint for a short-lived,
+room-scoped LiveKit credential and an explicit `hugging-voice` agent dispatch. It
+then publishes microphone audio and attaches the agent's remote audio track.
+
+The demo worker reads `HUGGING_VOICE_LANGUAGE`, `HUGGING_VOICE_VOICE`, and
+`HUGGING_VOICE_VOICE_INSTRUCTIONS`; they default to `de`, `warm_female`, and
+the service-configured voice style. The service's allowed language/voice maps live
+under `speech` in `services/gpu-service/config/default.yaml`. Rebuild after editing
+that image default. Scalar service defaults can also be overridden with
+`HV_SPEECH__DEFAULT_LANGUAGE` and `HV_SPEECH__DEFAULT_VOICE`.
+
+### Browser and network access
+
+The web UI and LiveKit signaling bind to loopback by default. For LAN or managed
+reverse-proxy access, publish them and tell LiveKit which host address clients can
+reach:
+
+```bash
+export HUGGING_VOICE_WEB_BIND_ADDRESS=0.0.0.0
+export LIVEKIT_BIND_ADDRESS=0.0.0.0
+export LIVEKIT_NODE_IP=10.0.0.25  # replace with this host's reachable address
+make demo-agent
+```
+
+The UI uses TCP 3000. LiveKit media uses TCP 7881 and UDP 7882 in this development
+configuration; firewalls must allow the client to reach those ports. You normally
+do not need to expose TCP 7880 because the web process proxies `/rtc` signaling on
+the page's origin.
+
+Microphone capture is allowed by browsers only on localhost or a trustworthy HTTPS
+origin. For development from another machine, a localhost tunnel is the smallest
+option:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 user@voice-host
+```
+
+Then browse to <http://localhost:3000>. The browser must still be able to reach the
+advertised LiveKit media address and ports. For Internet-facing use, terminate a
+trusted certificate on one public hostname, proxy the page and WebSocket upgrade
+to port 3000, set `LIVEKIT_NODE_IP` appropriately, and deploy LiveKit with its
+production TLS/TURN configuration. The included `--dev` server and fixed
+`devkey`/`secret` are local-development settings, not a public deployment.
+
+Relevant Compose controls are:
+
+- `HUGGING_VOICE_WEB_BIND_ADDRESS` and `HUGGING_VOICE_WEB_PORT` for the UI;
+- `LIVEKIT_BIND_ADDRESS` for direct signaling exposure when needed;
+- `LIVEKIT_RTC_BIND_ADDRESS` for media port binds;
+- `LIVEKIT_NODE_IP` for the media address advertised to browsers;
+- `LIVEKIT_PUBLIC_URL` to bypass the same-origin signaling proxy and give the UI
+  an existing `ws://` or `wss://` LiveKit endpoint.
 
 The optional overlay pins `livekit/livekit-server:v1.13.4`. For a release, resolve
 and record manifest digests before build; do not replace pinned tags with `latest`:

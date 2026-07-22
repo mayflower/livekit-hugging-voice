@@ -620,13 +620,17 @@ name = "hugging-voice-minimal-agent"
 version = "0.1.0"
 source = { editable = "examples/minimal-livekit-agent" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "livekit-agents" },
+    { name = "livekit-api" },
     { name = "livekit-plugins-hugging-voice" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = "==3.14.2" },
     { name = "livekit-agents", specifier = "==1.6.6" },
+    { name = "livekit-api", specifier = "==1.2.0" },
     { name = "livekit-plugins-hugging-voice", editable = "packages/livekit-plugins-hugging-voice" },
 ]
 

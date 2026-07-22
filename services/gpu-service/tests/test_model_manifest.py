@@ -65,7 +65,7 @@ def test_real_manifest_has_exact_revisions_and_expected_models() -> None:
     assert {model.id for model in manifest.models} == {
         "google/gemma-4-31B-it",
         "nvidia/parakeet-tdt-0.6b-v3",
-        "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+        "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
         "silero-vad",
     }
     hf_models = [model for model in manifest.models if model.delivery == "huggingface"]

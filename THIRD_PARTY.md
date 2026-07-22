@@ -16,7 +16,7 @@ not present in Git or the service image.
 | Hugging Face Hub | 0.36.0 | explicit prefetch only; Apache-2.0 | service Python dependency |
 | PyYAML | 6.0.3 | configuration/manifests; MIT | service Python dependency |
 | Gemma 4 31B IT GGUF | revision in `models/manifest.yaml` | language model; Apache-2.0 | weights fetched separately |
-| Qwen3-TTS CustomVoice GGUF | revision in `models/manifest.yaml` | synthesis; Apache-2.0 | weights fetched separately |
+| Qwen3-TTS VoiceDesign GGUF | revision in `models/manifest.yaml` | synthesis; Apache-2.0 | weights fetched separately |
 | NVIDIA Parakeet TDT 0.6B v3 | revision in `models/manifest.yaml` | transcription; CC-BY-4.0 | weights fetched separately |
 | Silero VAD | 6.2.1 | voice activity detection; MIT | optional GPU dependency |
 | llama.cpp | `3ce7da2c852c538c4c5f9806da27029cf8c9cc4a` | loopback model server; MIT | binary built in image |

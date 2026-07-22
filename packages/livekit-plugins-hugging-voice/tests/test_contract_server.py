@@ -65,6 +65,8 @@ class ContractServer:
     send_transcription: bool = True
     open_audio_frames: int = 2
     pause_response: bool = False
+    default_language: str = "de"
+    default_voice: str = "warm_female"
 
     def __post_init__(self) -> None:
         self.events: asyncio.Queue[ClientEvent] = asyncio.Queue()
@@ -106,6 +108,10 @@ class ContractServer:
                     llm=REVISION,
                     tts=REVISION,
                 ),
+                language=self.default_language,
+                voice=self.default_voice,
+                supported_languages=("de", "en"),
+                supported_voices=("clear_female", "warm_female"),
             ).model_dump_json()
         )
         sent_transcription = False
@@ -402,7 +408,13 @@ async def test_agent_session_starts_with_only_native_realtime_model(
 ) -> None:
     server = ContractServer(unused_tcp_port, send_transcription=False)
     await server.start()
-    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    model = RealtimeModel(
+        base_url=server.url,
+        token="contract-secret",
+        language="en",
+        voice="clear_female",
+        voice_instructions="Speak warmly and slowly.",
+    )
     agent_session: AgentSession[dict[str, Any]] = AgentSession(llm=model)
     try:
         await asyncio.wait_for(
@@ -415,9 +427,35 @@ async def test_agent_session_starts_with_only_native_realtime_model(
         update = await wait_client_event(server, "session.update")
         assert isinstance(update, SessionUpdateEvent)
         assert update.session.instructions == "Antworte knapp auf Deutsch."
+        assert update.session.language == "en"
+        assert update.session.voice == "clear_female"
+        assert update.session.voice_instructions == "Speak warmly and slowly."
         assert agent_session.llm is model
     finally:
         await agent_session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_omitted_speech_options_inherit_server_defaults(unused_tcp_port: int) -> None:
+    server = ContractServer(
+        unused_tcp_port,
+        send_transcription=False,
+        default_language="en",
+        default_voice="clear_female",
+    )
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    session = model.session()
+    try:
+        update = await wait_client_event(server, "session.update")
+        assert isinstance(update, SessionUpdateEvent)
+        assert update.session.language == "en"
+        assert update.session.voice == "clear_female"
+        assert update.session.voice_instructions is None
+    finally:
+        await session.aclose()
         await model.aclose()
         await server.close()
 

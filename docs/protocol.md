@@ -27,9 +27,12 @@ stereo, unsupported-rate, and oversized audio is invalid.
 
 ## Client events
 
-- `session.update`: bounded instructions, fixed German language/voice/audio, bounded
-  server-VAD values, interruption and transcription switches. Model, speaker, tool,
-  reference-audio, path, and cloud fields are impossible under the strict schema.
+- `session.update`: bounded instructions, language code, public voice ID, optional
+  speaking-style instructions, fixed audio, bounded server-VAD values, interruption
+  and transcription switches. The service validates language and voice against its
+  configured maps; null or omitted language/voice values inherit its advertised
+  defaults. Model, raw speaker, tool, reference-audio, path, and cloud fields
+  are impossible under the strict schema.
 - `input_audio_buffer.append`: ordered PCM16 chunk with a non-negative sequence.
 - `input_audio_buffer.commit` and `input_audio_buffer.clear`: explicit server-known
   buffer operations.
@@ -41,13 +44,13 @@ stereo, unsupported-rate, and oversized audio is invalid.
 
 ## Server events
 
-- `session.created` reports fixed model IDs, exact local revisions, German language,
-  voice alias, and sample rates.
+- `session.created` reports fixed model IDs, exact local revisions, configured
+  default language/voice, supported language/voice IDs, and sample rates.
 - `error` contains a bounded structured code/message, retryability, and optional
   source event ID.
 - `input_audio_buffer.speech_started` / `.speech_stopped` define server-VAD turns.
 - `conversation.item.input_audio_transcription.delta` / `.completed` carry partial
-  and final German transcription. Only completed text becomes conversation state.
+  and final multilingual transcription. Only completed text becomes conversation state.
 - `response.created` establishes the response/generation/item correlation.
 - `response.output_text.delta` / `.done` stream visible assistant text.
 - `response.output_audio.delta` / `.done` stream ordered PCM16 and close audio.
@@ -59,9 +62,9 @@ round-tripped by the protocol package tests.
 
 ## Bounds and close codes
 
-Instructions are capped at 8,000 characters, a replay item at 16,000, a text delta
-at 4,096, an error message at 2,048, and IDs at 96–100 characters with fixed
-prefixes. Pydantic models use `extra="forbid"`.
+Instructions are capped at 8,000 characters, voice-style instructions at 2,000, a
+replay item at 16,000, a text delta at 4,096, an error message at 2,048, and IDs at
+96–100 characters with fixed prefixes. Pydantic models use `extra="forbid"`.
 
 | Code | Meaning |
 |---:|---|

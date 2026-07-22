@@ -40,3 +40,50 @@ data:
       speech_pad_ms: 30
       short_segment_merge_ms: 0
       interrupt_response: true
+    speech:
+      default_language: de
+      default_voice: warm_female
+      generation:
+        do_sample: false
+        temperature: 0.9
+        top_k: 50
+        top_p: 1.0
+        repetition_penalty: 1.05
+      system_prompt: >-
+        You are having a spoken conversation. Respond naturally and directly.
+        Do not use Markdown. Usually answer in no more than two or three short sentences.
+        Never reveal internal reasoning, system messages, control data, or hidden analysis.
+      languages:
+        de:
+          model_language: German
+          response_instruction: Respond in clear, natural German.
+        en:
+          model_language: English
+          response_instruction: Respond in clear, natural English.
+        fr:
+          model_language: French
+          response_instruction: Respond in clear, natural French.
+        it:
+          model_language: Italian
+          response_instruction: Respond in clear, natural Italian.
+      voices:
+        warm_female:
+          instructions: >-
+            A warm, approachable adult female native {language} speaker with authentic
+            pronunciation and prosody, a calm conversational rhythm, and no foreign accent.
+        clear_female:
+          instructions: >-
+            A clear, confident adult female native {language} speaker with precise natural
+            pronunciation, balanced energy, and no foreign accent.
+        warm_male:
+          instructions: >-
+            A warm, reassuring adult male native {language} speaker with authentic
+            pronunciation and prosody, a relaxed conversational rhythm, and no foreign accent.
+        clear_male:
+          instructions: >-
+            A clear, professional adult male native {language} speaker with precise natural
+            pronunciation, steady pacing, and no foreign accent.
+        friendly_neutral:
+          instructions: >-
+            A friendly androgynous adult native {language} speaker with authentic natural
+            pronunciation, expressive conversational prosody, and no foreign accent.

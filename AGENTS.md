@@ -7,11 +7,12 @@ relevant to their concrete change and do not repeat a general upstream survey.
 
 ## Product boundary
 
-Build one focused local German speech-to-speech path:
+Build one focused local multilingual speech-to-speech path for German, English,
+French, and Italian:
 
 `LiveKit RealtimeModel plugin -> authenticated WebSocket -> Silero VAD -> shared
 Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
-1.7B CustomVoice`.
+1.7B VoiceDesign`.
 
 - Service, plugin, tests, and utilities are Python-only.
 - The plugin must implement LiveKit Agents' `RealtimeModel` and
@@ -21,17 +22,20 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
   add WebRTC, `aiortc`, ICE, STUN/TURN, browser capture, or a web UI to the GPU
   service.
 - Version 1 has no tools/function calling, MCP, mAIstack, FastEnhancer,
-  DeepFilterNet, voice cloning/design, arbitrary voices, camera, web search,
+  DeepFilterNet, voice cloning, reference audio, arbitrary client-provided voice
+  designs, camera, web search,
   database, Redis, broker, operator, Helm, service-mesh requirement, or generic
   provider/backend registry.
 - There is no cloud LLM, cloud fallback, silent CPU fallback, model downgrade,
   runtime download, `torch.hub` access, or movable model/Git/image pin.
 - Gemma is `google/gemma-4-31B-it`, locally quantized for llama.cpp. Never replace
   it with E4B. Parakeet is `nvidia/parakeet-tdt-0.6b-v3`; TTS is
-  `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`.
-- Public language and voice are fixed to `de`/`German` and
-  `de_standard_01`. The initial internal Qwen speaker is `Aiden` until a
-  documented German audition selects another speaker without changing the API.
+  `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
+- Public languages are `de`, `en`, `fr`, and `it`. Public voices are five fixed,
+  operator-defined VoiceDesign profiles: `warm_female`, `clear_female`,
+  `warm_male`, `clear_male`, and `friendly_neutral`. Clients may add bounded style
+  instructions but cannot submit model names, paths, reference audio, or arbitrary
+  base voice designs.
 
 ## Runtime invariants
 
