@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hugging-voice-protocol"
+version = "0.1.0"
+description = "Strict internal protocol types for livekit-hugging-voice"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10,<3.15"
+authors = [{ name = "livekit-hugging-voice contributors" }]
+dependencies = ["pydantic>=2.11,<3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hugging_voice_protocol"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/README.md", "/pyproject.toml"]

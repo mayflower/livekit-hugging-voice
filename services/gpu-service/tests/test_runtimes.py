@@ -1,0 +1,294 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pytest
+from aiohttp import web
+from hugging_voice_protocol.audio import OUTPUT_FRAME_BYTES
+from hugging_voice_service.runtimes.gemma import GemmaMessage, GemmaRuntime, TextDelta, TextUsage
+from hugging_voice_service.runtimes.parakeet import ParakeetRuntime
+from hugging_voice_service.runtimes.qwen_tts import QwenTTSRuntime
+from hugging_voice_service.runtimes.silero import SessionVAD
+
+
+class Probability:
+    def __init__(self, value: float) -> None:
+        self._value = value
+
+    def item(self) -> float:
+        return self._value
+
+
+class ScriptedVADModel:
+    def __init__(self, probabilities: list[float]) -> None:
+        self._probabilities = iter(probabilities)
+        self.reset_count = 0
+
+    def __call__(self, samples: object, sample_rate: int) -> Probability:
+        assert sample_rate == 16_000
+        assert len(samples) == 512  # type: ignore[arg-type]
+        return Probability(next(self._probabilities))
+
+    def reset_states(self) -> None:
+        self.reset_count += 1
+
+
+def test_session_vad_has_isolated_state_remainder_and_deterministic_boundaries() -> None:
+    model = ScriptedVADModel([0.9] * 12 + [0.1] * 16)
+    vad = SessionVAD(
+        model_factory=lambda: model,
+        sample_tensor_factory=lambda samples: samples,
+    )
+    payload = bytes(SessionVAD.window_bytes * 28 + 10)
+    signals = vad.process_pcm16(payload)
+    assert [(signal.kind, signal.sample_index) for signal in signals] == [
+        ("speech_started", 0),
+        ("speech_stopped", 6_624),
+    ]
+    assert vad.buffered_bytes == 10
+    assert not vad.speaking
+    vad.reset()
+    assert model.reset_count == 1
+    assert vad.buffered_bytes == 0
+
+
+def test_silero_recurrent_model_is_constructed_per_session() -> None:
+    created: list[ScriptedVADModel] = []
+
+    def factory() -> ScriptedVADModel:
+        model = ScriptedVADModel([0.1])
+        created.append(model)
+        return model
+
+    first = SessionVAD(model_factory=factory, sample_tensor_factory=lambda samples: samples)
+    second = SessionVAD(model_factory=factory, sample_tensor_factory=lambda samples: samples)
+    assert len(created) == 2
+    first.reset()
+    assert (created[0].reset_count, created[1].reset_count) == (1, 0)
+    assert first is not second
+
+
+class FakeParakeetModel:
+    def __init__(self) -> None:
+        self.inputs: list[np.ndarray[Any, Any]] = []
+
+    def transcribe(self, audio: Any, timestamps: bool = False) -> str:
+        assert timestamps is False
+        self.inputs.append(audio)
+        return "  Guten Tag.  "
+
+
+@pytest.mark.asyncio
+async def test_parakeet_loads_once_uses_local_file_and_runs_off_loop(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "model.nemo"
+    checkpoint.write_bytes(b"checkpoint")
+    model = FakeParakeetModel()
+    runtime = ParakeetRuntime(
+        checkpoint,
+        model_factory=lambda path: model,
+        cuda_probe=lambda: None,
+    )
+    runtime.load()
+    assert runtime.load_count == 1
+    with pytest.raises(RuntimeError, match="already loaded"):
+        runtime.load()
+    assert await runtime.transcribe_final(bytes(3_200)) == "Guten Tag."
+    assert model.inputs[0].dtype == np.float32
+    runtime.close()
+
+
+class FakeQwenModel:
+    def __init__(self) -> None:
+        self.warmups = 0
+        self.calls: list[dict[str, Any]] = []
+
+    def warmup(self, *, prefill_len: int = 100) -> None:
+        assert prefill_len == 100
+        self.warmups += 1
+
+    def generate_custom_voice_streaming(
+        self, **kwargs: Any
+    ) -> Iterator[tuple[np.ndarray[Any, Any], int, dict[str, Any]]]:
+        self.calls.append(kwargs)
+        yield np.full(600, 0.5, dtype=np.float32), 24_000, {}
+        yield np.full(100, -0.5, dtype=np.float32), 24_000, {}
+
+
+@pytest.mark.asyncio
+async def test_qwen_enforces_voice_and_emits_exact_pcm_frames(tmp_path: Path) -> None:
+    talker = tmp_path / "talker.gguf"
+    codec = tmp_path / "codec.gguf"
+    talker.write_bytes(b"talker")
+    codec.write_bytes(b"codec")
+    model = FakeQwenModel()
+    runtime = QwenTTSRuntime(
+        talker,
+        codec,
+        model_factory=lambda talker_path, codec_path: model,
+        cuda_probe=lambda: None,
+    )
+    runtime.load()
+    runtime.warmup()
+    assert runtime.load_count == 1
+    frames = [frame async for frame in runtime.stream_pcm16_frames("Guten Tag.")]
+    assert [len(frame) for frame in frames] == [OUTPUT_FRAME_BYTES, OUTPUT_FRAME_BYTES]
+    call = model.calls[-1]
+    assert call["speaker"] == "Aiden"
+    assert call["language"] == "German"
+    assert "Hochdeutsch" in call["instruct"]
+    with pytest.raises(ValueError, match="unsupported voice"):
+        _ = [
+            frame
+            async for frame in runtime.stream_pcm16_frames(
+                "Text",
+                voice="another_voice",
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_gemma_suppresses_reasoning_and_disables_thinking_in_request() -> None:
+    received: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        received.append(await request.json())
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        events = [
+            {"choices": [{"delta": {"reasoning_content": "geheim"}}]},
+            {"choices": [{"delta": {"content": "Antwort "}}]},
+            {"choices": [{"delta": {"content": "sichtbar."}}]},
+            {
+                "choices": [],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            },
+        ]
+        for event in events:
+            await response.write(f"data: {json.dumps(event)}\n\n".encode())
+        await response.write(b"data: [DONE]\n\n")
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    sockets = site._server.sockets  # type: ignore[union-attr]
+    port = sockets[0].getsockname()[1]
+    runtime = GemmaRuntime(port=port)
+    try:
+        events = [
+            event
+            async for event in runtime.stream_response(
+                messages=[GemmaMessage(role="user", content="Sag etwas.")]
+            )
+        ]
+    finally:
+        await runtime.aclose()
+        await runner.cleanup()
+
+    assert "".join(event.text for event in events if isinstance(event, TextDelta)) == (
+        "Antwort sichtbar."
+    )
+    assert [event for event in events if isinstance(event, TextUsage)] == [TextUsage(4, 2, 6)]
+    assert runtime.reasoning_violations == 1
+    assert received[0]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert received[0]["messages"][0]["role"] == "system"
+    assert "verborgene Analyse" in received[0]["messages"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_gemma_strips_fragmented_leading_thinking_block() -> None:
+    async def handler(request: web.Request) -> web.StreamResponse:
+        await request.read()
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        for content in (" <thi", "nk>nicht sichtbar", "</think>Ja."):
+            payload = {"choices": [{"delta": {"content": content}}]}
+            await response.write(f"data: {json.dumps(payload)}\n\n".encode())
+        await response.write(b"data: [DONE]\n\n")
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    sockets = site._server.sockets  # type: ignore[union-attr]
+    runtime = GemmaRuntime(port=sockets[0].getsockname()[1])
+    try:
+        events = [
+            event
+            async for event in runtime.stream_response(
+                messages=[GemmaMessage(role="user", content="Test")]
+            )
+        ]
+    finally:
+        await runtime.aclose()
+        await runner.cleanup()
+    assert [event.text for event in events if isinstance(event, TextDelta)] == ["Ja."]
+    assert runtime.reasoning_violations == 1
+
+
+@pytest.mark.asyncio
+async def test_gemma_allows_exactly_two_parallel_isolated_streams() -> None:
+    active = 0
+    maximum = 0
+    two_started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        nonlocal active, maximum
+        payload = await request.json()
+        canary = payload["messages"][-1]["content"]
+        active += 1
+        maximum = max(maximum, active)
+        if active == 2:
+            two_started.set()
+        await release.wait()
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        event = {"choices": [{"delta": {"content": canary}}]}
+        await response.write(f"data: {json.dumps(event)}\n\n".encode())
+        await response.write(b"data: [DONE]\n\n")
+        active -= 1
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    sockets = site._server.sockets  # type: ignore[union-attr]
+    runtime = GemmaRuntime(port=sockets[0].getsockname()[1])
+
+    async def consume(canary: str) -> str:
+        chunks = [
+            event.text
+            async for event in runtime.stream_response(
+                messages=[GemmaMessage(role="user", content=canary)]
+            )
+            if isinstance(event, TextDelta)
+        ]
+        return "".join(chunks)
+
+    tasks = [asyncio.create_task(consume(canary)) for canary in ("ALPHA", "BETA", "GAMMA")]
+    try:
+        await asyncio.wait_for(two_started.wait(), timeout=1.0)
+        assert maximum == 2
+        assert not tasks[2].done()
+        release.set()
+        assert await asyncio.gather(*tasks) == ["ALPHA", "BETA", "GAMMA"]
+        assert maximum == 2
+    finally:
+        release.set()
+        await runtime.aclose()
+        await runner.cleanup()

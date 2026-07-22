@@ -1,0 +1,67 @@
+name: CPU CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install Python 3.11
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
+        with:
+          python-version: "3.11"
+      - name: Install pinned uv
+        run: python -m pip install uv==0.11.7
+      - name: Synchronize locked workspace
+        run: uv sync --all-packages --frozen
+      - name: Lint
+        run: uv run ruff check .
+      - name: Check formatting
+        run: uv run ruff format --check .
+      - name: Type check
+        run: uv run mypy packages services examples
+      - name: Test
+        run: uv run pytest -q
+      - name: Build Python artifacts
+        run: |
+          uv run python -m build packages/hugging-voice-protocol --outdir dist
+          uv run python -m build packages/livekit-plugins-hugging-voice --outdir dist
+          uv run python -m build services/gpu-service --outdir dist
+          uv run python -m build examples/minimal-livekit-agent --outdir dist
+      - name: Render Docker Compose contracts
+        run: |
+          docker compose -f deploy/docker/compose.yaml config --no-interpolate >/dev/null
+          docker compose -f deploy/docker/compose.yaml -f deploy/docker/compose.livekit.yaml config --no-interpolate >/dev/null
+          docker build --check -f services/gpu-service/Dockerfile .
+          docker build --check -f examples/minimal-livekit-agent/Dockerfile .
+      - name: Install pinned Kubernetes validators
+        run: |
+          curl -fsSLo /tmp/kubectl https://dl.k8s.io/release/v1.33.2/bin/linux/amd64/kubectl
+          echo "33d0cdec6967817468f0a4a90f537dfef394dcf815d91966ca651cc118393eea  /tmp/kubectl" | sha256sum --check
+          chmod +x /tmp/kubectl
+          curl -fsSLo /tmp/kubeconform.tar.gz https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz
+          echo "c31518ddd122663b3f3aa874cfe8178cb0988de944f29c74a0b9260920d115d3  /tmp/kubeconform.tar.gz" | sha256sum --check
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+      - name: Render and validate Kubernetes manifests
+        run: |
+          /tmp/kubectl kustomize deploy/kubernetes/overlays/demo > /tmp/demo.yaml
+          /tmp/kubectl kustomize deploy/kubernetes/overlays/production > /tmp/production.yaml
+          /tmp/kubeconform -strict -summary /tmp/demo.yaml /tmp/production.yaml
+
+  container-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build service image without model weights
+        run: docker build --tag livekit-hugging-voice:ci -f services/gpu-service/Dockerfile .
+      - name: Record local image digest
+        run: docker image inspect --format='{{json .RepoDigests}} {{.Id}}' livekit-hugging-voice:ci

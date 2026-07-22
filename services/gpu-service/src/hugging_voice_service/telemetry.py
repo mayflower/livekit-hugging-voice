@@ -1,0 +1,161 @@
+"""Low-cardinality service metrics owned by one application lifecycle."""
+
+from __future__ import annotations
+
+from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
+
+
+class ServiceTelemetry:
+    def __init__(self) -> None:
+        self.registry = CollectorRegistry()
+        self.ready = Gauge(
+            "hugging_voice_service_ready",
+            "Whether all verified local models are warm and admission may start",
+            registry=self.registry,
+        )
+        self.model_loads = Counter(
+            "hugging_voice_model_loads",
+            "Concrete model/runtime constructions in this service lifecycle",
+            ("model",),
+            registry=self.registry,
+        )
+        self.lifecycle_failures = Counter(
+            "hugging_voice_lifecycle_failures",
+            "Service startup/runtime failures by fixed lifecycle stage",
+            ("stage",),
+            registry=self.registry,
+        )
+        self.reasoning_violations = Counter(
+            "hugging_voice_reasoning_violations",
+            "Reasoning fields or leading thinking blocks suppressed from visible output",
+            registry=self.registry,
+        )
+        self.sessions_active = Gauge(
+            "hugging_voice_sessions_active",
+            "Connected active sessions",
+            registry=self.registry,
+        )
+        self.sessions_available = Gauge(
+            "hugging_voice_sessions_available",
+            "Immediately claimable session slots",
+            registry=self.registry,
+        )
+        self.sessions_rejected = Counter(
+            "hugging_voice_sessions_rejected",
+            "Sessions rejected because the service is full or draining",
+            registry=self.registry,
+        )
+        self.sessions_draining = Gauge(
+            "hugging_voice_sessions_draining",
+            "Slots waiting for complete worker drain",
+            registry=self.registry,
+        )
+        self.sessions_stuck = Gauge(
+            "hugging_voice_sessions_stuck",
+            "Quarantined slots whose worker chain did not drain",
+            registry=self.registry,
+        )
+        self.turns = Counter(
+            "hugging_voice_turns",
+            "Completed input turns",
+            registry=self.registry,
+        )
+        self.turns_cancelled = Counter(
+            "hugging_voice_turns_cancelled",
+            "Cancelled response generations",
+            registry=self.registry,
+        )
+        self.stt_queue_seconds = Histogram(
+            "hugging_voice_stt_queue_seconds",
+            "STT scheduler queue wait",
+            registry=self.registry,
+        )
+        self.stt_inference_seconds = Histogram(
+            "hugging_voice_stt_inference_seconds",
+            "STT inference duration",
+            registry=self.registry,
+        )
+        self.transcription_delay_seconds = Histogram(
+            "hugging_voice_transcription_delay_seconds",
+            "Speech stop to final transcription",
+            registry=self.registry,
+        )
+        self.llm_ttft_seconds = Histogram(
+            "hugging_voice_llm_ttft_seconds",
+            "LLM request to first visible text",
+            registry=self.registry,
+        )
+        self.llm_duration_seconds = Histogram(
+            "hugging_voice_llm_duration_seconds",
+            "LLM streaming duration",
+            registry=self.registry,
+        )
+        self.llm_tokens_per_second = Histogram(
+            "hugging_voice_llm_tokens_per_second",
+            "Service-reported visible text token throughput",
+            registry=self.registry,
+        )
+        self.tts_queue_seconds = Histogram(
+            "hugging_voice_tts_queue_seconds",
+            "TTS scheduler queue wait",
+            registry=self.registry,
+        )
+        self.tts_ttfa_seconds = Histogram(
+            "hugging_voice_tts_ttfa_seconds",
+            "TTS segment start to first audio",
+            registry=self.registry,
+        )
+        self.tts_duration_seconds = Histogram(
+            "hugging_voice_tts_duration_seconds",
+            "TTS segment generation duration",
+            registry=self.registry,
+        )
+        self.tts_audio_seconds = Histogram(
+            "hugging_voice_tts_audio_seconds",
+            "Generated TTS audio duration",
+            registry=self.registry,
+        )
+        self.first_audio_latency_seconds = Histogram(
+            "hugging_voice_first_audio_latency_seconds",
+            "Speech stop to first response audio",
+            registry=self.registry,
+        )
+        self.barge_in_stop_latency_seconds = Histogram(
+            "hugging_voice_barge_in_stop_latency_seconds",
+            "Barge-in detection to final stale audio suppression",
+            registry=self.registry,
+        )
+        self.stale_chunks_dropped = Counter(
+            "hugging_voice_stale_chunks_dropped",
+            "Text/audio chunks rejected by generation tags",
+            registry=self.registry,
+        )
+        self.websocket_errors = Counter(
+            "hugging_voice_websocket_errors",
+            "Structured WebSocket failures",
+            registry=self.registry,
+        )
+        self.stt_jobs_active = Gauge(
+            "hugging_voice_stt_jobs_active",
+            "Currently executing shared STT jobs",
+            registry=self.registry,
+        )
+        self.tts_jobs_active = Gauge(
+            "hugging_voice_tts_jobs_active",
+            "Currently executing shared TTS jobs",
+            registry=self.registry,
+        )
+        self.llm_jobs_active = Gauge(
+            "hugging_voice_llm_jobs_active",
+            "Currently active Gemma streams",
+            registry=self.registry,
+        )
+        self.gpu_memory_bytes = Gauge(
+            "hugging_voice_gpu_memory_bytes",
+            "Observed GPU memory use when NVML data is available",
+            registry=self.registry,
+        )
+        self.ready.set(0)
+
+    def render(self) -> bytes:
+        return generate_latest(self.registry)

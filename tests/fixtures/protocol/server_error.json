@@ -1,0 +1,1 @@
+{"type":"error","event_id":"evt_102","protocol_version":1,"session_id":"session_alpha","error":{"code":"invalid_event","message":"The event failed validation.","retryable":false,"event_id":"evt_002"}}

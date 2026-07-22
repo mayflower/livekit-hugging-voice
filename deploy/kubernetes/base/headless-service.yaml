@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hugging-voice-headless
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: false
+  selector:
+    app.kubernetes.io/name: hugging-voice
+  ports:
+    - name: http
+      port: 8765
+      targetPort: http

@@ -1,0 +1,73 @@
+name: Real GPU E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_soak:
+        description: Run the 30-minute two-session soak
+        required: true
+        default: false
+        type: boolean
+  schedule:
+    - cron: "17 2 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  gpu-e2e:
+    if: ${{ vars.HV_ENABLE_GPU_E2E == '1' }}
+    runs-on: [self-hosted, linux, x64, hugging-voice-gpu]
+    timeout-minutes: 90
+    env:
+      HV_RUN_GPU_TESTS: "1"
+      HV_GPU_SERVICE_URL: http://127.0.0.1:8765
+      MODEL_ROOT: ${{ vars.HV_GPU_MODEL_ROOT }}
+      MODEL_LOCK: ${{ vars.HV_GPU_MODEL_LOCK }}
+      HUGGING_VOICE_MODEL_ROOT: ${{ vars.HV_GPU_MODEL_ROOT }}
+      HUGGING_VOICE_MODEL_LOCK: ${{ vars.HV_GPU_MODEL_LOCK }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Verify runner prerequisites
+        run: |
+          nvidia-smi
+          test -n "${MODEL_ROOT}"
+          test -n "${MODEL_LOCK}"
+          test -d "${MODEL_ROOT}"
+          test -f "${MODEL_LOCK}"
+          test -f /run/secrets/hugging_voice_token
+      - name: Install pinned uv
+        run: python3.11 -m pip install uv==0.11.7
+      - name: Synchronize locked GPU environment
+        run: uv sync --all-packages --extra gpu --frozen
+      - name: Verify models offline
+        run: make models-verify
+      - name: Run real GPU tests
+        run: uv run pytest -q -m gpu -k 'not external'
+      - name: Build and start offline service container
+        run: |
+          install -m 640 /run/secrets/hugging_voice_token deploy/docker/secrets/token
+          export HUGGING_VOICE_SECRET_GID="$(id -g)"
+          docker compose -f deploy/docker/compose.yaml build
+          docker compose -f deploy/docker/compose.yaml up -d
+          timeout 900 bash -c 'until curl --fail --silent http://127.0.0.1:8765/health/ready >/dev/null; do sleep 5; done'
+      - name: Run external AgentSession and two-session E2E
+        env:
+          HV_GPU_TOKEN_FILE: deploy/docker/secrets/token
+          HV_GPU_WAV_A: ${{ vars.HV_GPU_WAV_A }}
+          HV_GPU_WAV_B: ${{ vars.HV_GPU_WAV_B }}
+        run: >-
+          uv run pytest -q -m gpu
+          -k 'external_agent_session or external_two_session_e2e'
+      - name: Run explicit soak
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_soak) || github.event_name == 'schedule' }}
+        env:
+          HV_RUN_GPU_SOAK: "1"
+          HV_GPU_TOKEN_FILE: deploy/docker/secrets/token
+          HV_GPU_WAV_A: ${{ vars.HV_GPU_WAV_A }}
+          HV_GPU_WAV_B: ${{ vars.HV_GPU_WAV_B }}
+        run: uv run pytest -q -m gpu -k external_two_session_soak
+      - name: Stop service
+        if: always()
+        run: docker compose -f deploy/docker/compose.yaml down

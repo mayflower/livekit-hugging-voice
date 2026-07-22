@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: livekit-hugging-voice
+    newName: livekit-hugging-voice
+    newTag: 0.1.0
+replicas:
+  - name: hugging-voice
+    count: 3
+patches:
+  - path: anti-affinity.yaml

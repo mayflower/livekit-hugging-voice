@@ -1,0 +1,62 @@
+name: hugging-voice
+
+services:
+  hugging-voice:
+    image: livekit-hugging-voice:local
+    build:
+      context: ../..
+      dockerfile: services/gpu-service/Dockerfile
+      args:
+        LLAMA_CPP_COMMIT: 3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
+        VCS_REF: ${VCS_REF:-local}
+    ports:
+      - "127.0.0.1:${HUGGING_VOICE_PORT:-8765}:8765"
+    environment:
+      HV_SERVER__MAX_SESSIONS: "2"
+      HV_MODELS__LOCK_FILE: /etc/hugging-voice/manifest.lock.json
+      NVIDIA_VISIBLE_DEVICES: ${HUGGING_VOICE_GPU_DEVICE:-0}
+    group_add:
+      - "${HUGGING_VOICE_SECRET_GID:-10001}"
+    volumes:
+      - type: bind
+        source: ${HUGGING_VOICE_MODEL_ROOT:-../../.models}
+        target: /models
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${HUGGING_VOICE_MODEL_LOCK:-../../models/manifest.lock.json}
+        target: /etc/hugging-voice/manifest.lock.json
+        read_only: true
+        bind:
+          create_host_path: false
+    secrets:
+      - source: hugging_voice_token
+        target: hugging_voice_token
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=4g,uid=10001,gid=10001
+      - /cache:rw,noexec,nosuid,size=8g,uid=10001,gid=10001
+    shm_size: 8gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${HUGGING_VOICE_GPU_DEVICE:-0}"]
+              capabilities: [gpu]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health/ready', timeout=2).read()"
+      interval: 15s
+      timeout: 3s
+      start_period: 15m
+      retries: 3
+    stop_grace_period: 45s
+
+secrets:
+  hugging_voice_token:
+    file: ./secrets/token

@@ -1,0 +1,13 @@
+.git
+.venv
+.models
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/*.pyc
+**/tests
+dist
+build
+benchmarks/reports
+deploy/docker/secrets

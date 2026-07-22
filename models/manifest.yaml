@@ -1,0 +1,33 @@
+schema_version: 1
+models:
+  - delivery: huggingface
+    id: google/gemma-4-31B-it
+    source_repo: ggml-org/gemma-4-31B-it-GGUF
+    revision: 83233b01829859b51252aa4fd1de1cf9e1cf91cc
+    license: Apache-2.0
+    files:
+      - path: gemma-4-31B-it-Q4_0.gguf
+
+  - delivery: huggingface
+    id: nvidia/parakeet-tdt-0.6b-v3
+    source_repo: nvidia/parakeet-tdt-0.6b-v3
+    revision: 7c35754d166cca382ad1e53e68b01e7c575f3a1d
+    license: CC-BY-4.0
+    files:
+      - path: parakeet-tdt-0.6b-v3.nemo
+
+  - delivery: huggingface
+    id: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    source_repo: Serveurperso/Qwen3-TTS-GGUF
+    revision: e0f336a048a3de02b29b8ad92969217d9ecffe3e
+    license: Apache-2.0
+    files:
+      - path: qwen-talker-1.7b-customvoice-BF16.gguf
+      - path: qwen-tokenizer-12hz-BF16.gguf
+
+  - delivery: python-package
+    id: silero-vad
+    source_repo: pypi:silero-vad
+    revision: 6.2.1
+    license: MIT
+    files: []

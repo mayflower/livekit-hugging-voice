@@ -1,0 +1,66 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hugging-voice-model-prefetch
+  annotations:
+    livekit-hugging-voice.lifecycle: explicit-one-shot-not-part-of-rollouts
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hugging-voice-model-prefetch
+    spec:
+      restartPolicy: Never
+      serviceAccountName: hugging-voice
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: prefetch
+          image: livekit-hugging-voice:local
+          imagePullPolicy: IfNotPresent
+          command: ["/opt/venv/bin/hugging-voice-model-prefetch"]
+          args:
+            - --manifest
+            - /etc/hugging-voice/manifest.yaml
+            - --output
+            - /models
+            - --lock
+            - /models/manifest.lock.json
+          env:
+            - name: HF_HOME
+              value: /cache/huggingface
+            - name: HF_HUB_OFFLINE
+              value: "0"
+            - name: TRANSFORMERS_OFFLINE
+              value: "0"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "8"
+              memory: 16Gi
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: cache
+              mountPath: /cache
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: hugging-voice-models
+        - name: cache
+          emptyDir:
+            sizeLimit: 8Gi

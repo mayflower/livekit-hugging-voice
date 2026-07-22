@@ -1,0 +1,39 @@
+server:
+  host: 0.0.0.0
+  port: 8765
+  max_sessions: 2
+  token_file: /run/secrets/hugging_voice_token
+  inbound_queue_size: 128
+  outbound_queue_size: 256
+  drain_timeout_seconds: 30.0
+
+models:
+  root: /models
+  lock_file: /models/manifest.lock.json
+  llama_server_binary: /usr/local/bin/llama-server
+  llama_cpp_commit: 3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
+  llama_port: 8081
+  llama_context_size: 32768
+  llama_parallel_slots: 2
+  llama_startup_timeout_seconds: 600.0
+  llama_shutdown_timeout_seconds: 15.0
+
+audio:
+  input_encoding: pcm_s16le
+  input_sample_rate: 16000
+  input_channels: 1
+  input_chunk_ms: 40
+  output_encoding: pcm_s16le
+  output_sample_rate: 24000
+  output_channels: 1
+  output_frame_ms: 20
+  vad_window_samples: 512
+
+vad:
+  threshold: 0.6
+  min_speech_ms: 384
+  min_speech_continuation_ms: 192
+  min_silence_ms: 500
+  speech_pad_ms: 30
+  short_segment_merge_ms: 0
+  interrupt_response: true

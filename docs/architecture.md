@@ -1,0 +1,58 @@
+# Architecture
+
+## Scope
+
+The end device continues to use WebRTC with LiveKit. The Python LiveKit Agent uses
+a native `livekit.agents.llm.RealtimeModel` plugin, which opens an authenticated
+WebSocket to the GPU service. The GPU service does not implement another WebRTC
+hop.
+
+One GPU-service pod contains one Python ASGI process and one loopback-bound
+`llama-server` child managed by that Python process. The pod loads one shared
+Parakeet runtime, one shared Qwen runtime, and one Gemma 4 31B model in llama.cpp
+with two sequence slots. Each of the at most two admitted sessions owns its VAD,
+audio remainder, conversation, IDs, cancellation generation, lifecycle, and
+transport.
+
+The concrete startup lifecycle is deliberately ordered: verify every local byte
+and the pinned Silero package offline, require CUDA, start the exact llama.cpp
+commit and complete a real generation probe, load/warm Parakeet from its local
+`.nemo`, load/warm Qwen from explicit talker/codec GGUF paths, and complete a
+visible Gemma warmup. Partial failure unwinds already-created resources and leaves
+readiness red. Unexpected llama-server exit also revokes readiness immediately.
+
+Gemma requests always prepend the fixed German speech prompt, cap output at 256
+tokens, and pass `chat_template_kwargs.enable_thinking=false`. Reasoning fields
+are suppressed, and a defensive streaming filter quarantines a leading thinking
+block rather than exposing it to later TTS stages.
+
+Shared STT and TTS runtimes are protected by small bounded fair schedulers. Gemma
+allows two text generations while keeping request and cancellation state isolated.
+Every output is generation-tagged so cancellation can discard stale text and audio
+without suppressing a subsequent response.
+
+WebSocket authentication and exact subprotocol validation happen before atomic
+slot claim. Each connection has bounded inbound and outbound queues and one
+serialized sender. Final STT runs before partial STT; both STT classes and TTS
+segments are round-robin across sessions. Only opportunistic partial transcription
+may be dropped. Session release cancels the active generation, drains shared-worker
+work for that session, clears VAD/audio/conversation state, and only then returns a
+slot to `idle`.
+
+## Fixed decisions
+
+- German only: protocol language `de`, Qwen language `German`.
+- Public voice only: `de_standard_01`; internal speaker begins as `Aiden`.
+- Models: Silero VAD, Parakeet TDT 0.6B v3, Gemma 4 31B IT, Qwen3-TTS 1.7B
+  CustomVoice.
+- Internal transport: authenticated bounded WebSocket carrying JSON and PCM16.
+- Packaging: a small protocol library, the LiveKit plugin wheel, and the GPU service
+  image.
+- Deployment: Docker Compose for local operation and Kustomize for Kubernetes.
+- State: ephemeral and per session; no database, Redis, broker, or operator.
+
+## Exclusions
+
+No UI, extra WebRTC stack, cloud model, tool calling, arbitrary voice/model
+selection, voice cloning, audio enhancement, production fake backend, silent
+fallback, or runtime model download is part of version 1.

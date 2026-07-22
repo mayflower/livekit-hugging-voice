@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hugging-voice-minimal-agent"
+version = "0.1.0"
+description = "Minimal LiveKit Agent example for livekit-hugging-voice"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11,<3.12"
+authors = [{ name = "livekit-hugging-voice contributors" }]
+dependencies = [
+  "livekit-agents==1.6.6",
+  "livekit-plugins-hugging-voice==0.1.0",
+]
+
+[tool.uv.sources]
+livekit-plugins-hugging-voice = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+include = ["agent.py"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/agent.py", "/README.md", "/pyproject.toml"]

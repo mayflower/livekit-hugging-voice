@@ -1,0 +1,33 @@
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.4
+    command: ["--dev", "--bind", "0.0.0.0"]
+    ports:
+      - "127.0.0.1:7880:7880"
+      - "127.0.0.1:7881:7881"
+      - "50000-50100:50000-50100/udp"
+
+  agent:
+    image: livekit-hugging-voice-agent:local
+    build:
+      context: ../..
+      dockerfile: examples/minimal-livekit-agent/Dockerfile
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: devkey
+      LIVEKIT_API_SECRET: secret
+      HUGGING_VOICE_BASE_URL: ws://hugging-voice:8765/v1/realtime
+      HUGGING_VOICE_TOKEN_FILE: /run/secrets/hugging_voice_token
+    secrets:
+      - source: hugging_voice_token
+        target: hugging_voice_token
+    group_add:
+      - "${HUGGING_VOICE_SECRET_GID:-10001}"
+    depends_on:
+      livekit:
+        condition: service_started
+      hugging-voice:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m,uid=10001,gid=10001
