@@ -22,7 +22,7 @@ CUDA, llama.cpp generation, Parakeet, Qwen, Gemma warmup, and realtime scheduler
 startup all succeed.
 
 `WS /v1/realtime` requires `Authorization: Bearer …` and subprotocol
-`hugging-voice-livekit.v1`. The same token protects `/v1/models`, `/v1/capacity`,
+`hugging-voice-livekit.v2`. The same token protects `/v1/models`, `/v1/capacity`,
 `/v1/pool`, and `/v1/usage`; health and metrics remain available to internal
 probes. Admission has no wait queue: at most two sessions are active or draining,
 and the third receives structured `session_limit_reached` followed by close 4429.

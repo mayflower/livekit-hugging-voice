@@ -1,6 +1,6 @@
 # Third-party components
 
-This inventory records the version-locked direct runtime components for 0.1.0.
+This inventory records the version-locked direct runtime components for 0.2.0.
 Transitive Python versions are fixed in `uv.lock`; image manifest digests are
 generated with `make image-digests`. Model weights are fetched separately and are
 not present in Git or the service image.

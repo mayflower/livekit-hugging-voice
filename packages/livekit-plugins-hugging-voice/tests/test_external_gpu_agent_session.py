@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 import wave
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+import aiohttp
 import pytest
 from livekit import rtc
-from livekit.agents import Agent, AgentSession
+from livekit.agents import Agent, AgentSession, function_tool
 from livekit.agents.voice.io import AudioInput, AudioOutput, AudioOutputCapabilities
 from livekit.plugins.hugging_voice import RealtimeModel
 
@@ -161,5 +163,76 @@ async def test_external_agent_session_builtin_transcription_and_audio() -> None:
         assert session.tts is None
     finally:
         await audio_input.close()
+        await session.aclose()
+        await model.aclose()
+
+
+@pytest.mark.gpu
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_external_agent_session_native_tool_turn_is_silent_until_result() -> None:
+    token_path, _ = external_assets()
+    token = token_path.read_text(encoding="utf-8").strip()
+    audio_output = CapturingAudioOutput()
+    tool_started = asyncio.Event()
+    tool_finished = asyncio.Event()
+
+    @function_tool
+    async def add_numbers(a: int, b: int) -> str:
+        """Add two integers exactly."""
+
+        assert not audio_output.frames, "tool generation emitted audio before execution"
+        tool_started.set()
+        result = str(a + b)
+        tool_finished.set()
+        return result
+
+    model = RealtimeModel(
+        base_url=realtime_url(os.environ.get("HV_GPU_SERVICE_URL", "http://127.0.0.1:8765")),
+        token=token,
+    )
+    session: AgentSession[dict[str, Any]] = AgentSession(llm=model)
+    session.output.audio = audio_output
+    executed = asyncio.Event()
+    session.on("function_tools_executed", lambda event: executed.set())
+    try:
+        await session.start(
+            agent=Agent(
+                instructions=("Use add_numbers for additions and then answer briefly in German."),
+                tools=[add_numbers],
+            ),
+            record=False,
+        )
+        handle = session.generate_reply(
+            user_input="Was ist neunzehn plus dreiundzwanzig?",
+            tool_choice="required",
+        )
+        await asyncio.wait_for(handle, timeout=240.0)
+        assert tool_started.is_set() and tool_finished.is_set() and executed.is_set()
+        assert audio_output.frames
+        assert all(frame.sample_rate == 24_000 for frame in audio_output.frames)
+        assert session.llm is model and session.stt is None and session.tts is None
+        service_url = os.environ.get("HV_GPU_SERVICE_URL", "http://127.0.0.1:8765")
+        parts = urlsplit(service_url)
+        metrics_url = urlunsplit(
+            (
+                {"ws": "http", "wss": "https"}.get(parts.scheme, parts.scheme),
+                parts.netloc,
+                "/metrics",
+                "",
+                "",
+            )
+        )
+        async with aiohttp.ClientSession() as client:
+            async with client.get(metrics_url) as response:
+                metrics = await response.text()
+                assert response.status == 200
+        for runtime in ("gemma", "parakeet", "qwen_tts"):
+            assert re.search(
+                rf'^hugging_voice_model_loads_total\{{model="{runtime}"\}} 1(?:\.0)?$',
+                metrics,
+                re.MULTILINE,
+            )
+    finally:
         await session.aclose()
         await model.aclose()

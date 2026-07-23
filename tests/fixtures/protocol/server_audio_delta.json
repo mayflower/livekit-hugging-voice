@@ -1,1 +1,1 @@
-{"type":"response.output_audio.delta","event_id":"evt_110","protocol_version":1,"session_id":"session_alpha","turn_id":"turn_001","turn_revision":0,"generation_id":"gen_001","response_id":"resp_001","item_id":"item_assistant_001","sequence":0,"audio":"AAAAAA=="}
+{"type":"response.output_audio.delta","event_id":"evt_110","protocol_version":2,"session_id":"session_alpha","turn_id":"turn_001","turn_revision":0,"generation_id":"gen_001","response_id":"resp_001","item_id":"item_assistant_001","sequence":0,"audio":"AAAAAA=="}

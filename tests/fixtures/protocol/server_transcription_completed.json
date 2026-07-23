@@ -1,1 +1,1 @@
-{"type":"conversation.item.input_audio_transcription.completed","event_id":"evt_106","protocol_version":1,"session_id":"session_alpha","turn_id":"turn_001","turn_revision":0,"item_id":"item_user_001","transcript":"Wie ist das Wetter?"}
+{"type":"conversation.item.input_audio_transcription.completed","event_id":"evt_106","protocol_version":2,"session_id":"session_alpha","turn_id":"turn_001","turn_revision":0,"item_id":"item_user_001","transcript":"Wie ist das Wetter?"}

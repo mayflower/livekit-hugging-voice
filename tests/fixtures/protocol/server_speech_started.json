@@ -1,1 +1,1 @@
-{"type":"input_audio_buffer.speech_started","event_id":"evt_103","protocol_version":1,"session_id":"session_alpha","turn_id":"turn_001","turn_revision":0,"audio_start_ms":120}
+{"type":"input_audio_buffer.speech_started","event_id":"evt_103","protocol_version":2,"session_id":"session_alpha","turn_id":"turn_001","turn_revision":0,"audio_start_ms":120}

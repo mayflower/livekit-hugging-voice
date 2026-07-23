@@ -1,0 +1,1 @@
+{"type":"conversation.item.create","event_id":"evt_203","protocol_version":2,"session_id":"session_alpha","item":{"type":"function_call_output","id":"item_tool_output_1","call_id":"call_add_1","name":"add_numbers","output":"42","is_error":false,"turn_id":"turn_001","turn_revision":0,"generation_id":"gen_001","response_id":"resp_001"}}

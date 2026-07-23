@@ -1,5 +1,10 @@
 # Security boundary
 
+Native tools execute only in the LiveKit worker. The GPU service receives bounded
+schemas, calls, and serialized results, but no credentials or MCP connections.
+Tool results remain untrusted data-role context and cannot replace fixed system
+or voice instructions; argument and output bodies are not logged.
+
 The GPU service is an internal authenticated endpoint, not an Internet-facing media
 server. Every `/v1/*` HTTP request and WebSocket upgrade requires the bearer token;
 health and low-cardinality Prometheus endpoints carry no conversation data. Put TLS

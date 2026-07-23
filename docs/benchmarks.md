@@ -1,5 +1,11 @@
 # Benchmark method
 
+Tool-turn records add decision, call, execution, result-ACK, final text/audio,
+call/result size, slot, error, cancellation, and stale timestamps. Summaries must
+separate one- and two-session p50/p95/p99 results and retain full provenance.
+Run the existing two-session driver with `--tool-turns --skip-barge-in-probe`;
+the driver returns the bounded `add_numbers` result and measures both Gemma passes.
+
 Benchmark reports are evidence, not configuration targets. They are generated only
 from real service events and real NVIDIA telemetry. The repository intentionally
 contains no populated performance report because the current checkout has no locked
@@ -13,14 +19,21 @@ uv run python benchmarks/gpu_memory.py \
   --phase two_sessions --output benchmarks/reports/gpu-memory-two.csv --duration 1900
 ```
 
-Run two overlapping sessions for 30 minutes in another terminal:
+Run one session and then two overlapping sessions for 30 minutes each:
 
 ```bash
 uv run python benchmarks/two_session_soak.py \
   --token-file deploy/docker/secrets/token \
+  --wav-a /path/to/alpha-de.wav --sessions 1 --tool-turns \
+  --duration 1800 --output benchmarks/reports/one-session.raw.jsonl
+uv run python benchmarks/two_session_soak.py \
+  --token-file deploy/docker/secrets/token \
   --wav-a /path/to/alpha-de.wav --wav-b /path/to/beta-de.wav \
-  --duration 1800
-uv run python benchmarks/summarize.py benchmarks/reports/two-session-*.raw.jsonl \
+  --sessions 2 --tool-turns --duration 1800 \
+  --output benchmarks/reports/two-session.raw.jsonl
+uv run python benchmarks/summarize.py benchmarks/reports/one-session.raw.jsonl \
+  --gpu-csv benchmarks/reports/gpu-memory-one.csv
+uv run python benchmarks/summarize.py benchmarks/reports/two-session.raw.jsonl \
   --gpu-csv benchmarks/reports/gpu-memory-two.csv
 ```
 

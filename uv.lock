@@ -573,7 +573,7 @@ wheels = [
 
 [[package]]
 name = "hugging-voice-gpu-service"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "services/gpu-service" }
 dependencies = [
     { name = "aiohttp" },
@@ -617,7 +617,7 @@ provides-extras = ["gpu"]
 
 [[package]]
 name = "hugging-voice-minimal-agent"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "examples/minimal-livekit-agent" }
 dependencies = [
     { name = "aiohttp" },
@@ -636,7 +636,7 @@ requires-dist = [
 
 [[package]]
 name = "hugging-voice-protocol"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/hugging-voice-protocol" }
 dependencies = [
     { name = "pydantic" },
@@ -916,7 +916,7 @@ wheels = [
 
 [[package]]
 name = "livekit-plugins-hugging-voice"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/livekit-plugins-hugging-voice" }
 dependencies = [
     { name = "aiohttp" },

@@ -22,7 +22,8 @@ five fixed VoiceDesign profiles; `de` and `warm_female` are the defaults.
 
 ## Status
 
-Version 0.1.0 is implemented locally: strict protocol, offline CUDA service,
+Version 0.2.0 is implemented locally: strict protocol, native LiveKit tool calling,
+offline CUDA service,
 native LiveKit plugin, bounded two-session pipeline, exact model delivery,
 Docker/Compose, Kustomize, capacity-aware pod discovery, CPU contracts, and
 reproducible GPU/benchmark tooling.

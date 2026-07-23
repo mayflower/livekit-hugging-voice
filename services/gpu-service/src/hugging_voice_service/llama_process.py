@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import aiohttp
 
@@ -171,12 +173,35 @@ class LlamaProcess:
         raise LlamaProcessError(f"llama-server did not become ready within {self.startup_timeout}s")
 
     async def _probe_generation(self, session: aiohttp.ClientSession) -> None:
-        payload = {
+        payload: dict[str, Any] = {
             "model": "gemma-4-31b",
-            "messages": [{"role": "user", "content": "Antworte nur mit OK."}],
-            "max_tokens": 4,
+            "messages": [{"role": "user", "content": "Addiere 19 und 23."}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add_numbers",
+                        "description": "Add two integers.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "a": {"type": "integer"},
+                                "b": {"type": "integer"},
+                            },
+                            "required": ["a", "b"],
+                            "additionalProperties": False,
+                        },
+                        "strict": True,
+                    },
+                }
+            ],
+            "tool_choice": "required",
+            "parallel_tool_calls": False,
+            "max_tokens": 128,
             "temperature": 0,
             "stream": False,
+            "cache_prompt": True,
+            "id_slot": 0,
             "chat_template_kwargs": {"enable_thinking": False},
         }
         async with session.post(f"{self.base_url}/v1/chat/completions", json=payload) as response:
@@ -186,6 +211,38 @@ class LlamaProcess:
                     f"llama-server readiness generation failed status={response.status} "
                     f"body={body[:512]!r}"
                 )
+        try:
+            first = json.loads(body)
+            message = first["choices"][0]["message"]
+            calls = message["tool_calls"]
+            if len(calls) != 1 or calls[0]["function"]["name"] != "add_numbers":
+                raise ValueError("unexpected structured tool call")
+            arguments = json.loads(calls[0]["function"]["arguments"])
+            if arguments != {"a": 19, "b": 23}:
+                raise ValueError("unexpected readiness arguments")
+            call_id = calls[0]["id"]
+        except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise LlamaProcessError("llama-server structured tool-call probe failed") from exc
+
+        payload["messages"] = [
+            payload["messages"][0],
+            {"role": "assistant", "content": None, "tool_calls": calls},
+            {"role": "tool", "tool_call_id": call_id, "name": "add_numbers", "content": "42"},
+        ]
+        payload["tool_choice"] = "none"
+        async with session.post(f"{self.base_url}/v1/chat/completions", json=payload) as response:
+            body = await response.text()
+            if response.status != 200:
+                raise LlamaProcessError(
+                    f"llama-server tool-result probe failed status={response.status} "
+                    f"body={body[:512]!r}"
+                )
+        try:
+            final = json.loads(body)["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise LlamaProcessError("llama-server tool-result probe was malformed") from exc
+        if "42" not in str(final):
+            raise LlamaProcessError("llama-server did not use the readiness tool result")
 
     async def _monitor(self) -> None:
         process = self._process

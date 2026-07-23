@@ -4,11 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 import aiohttp
+from hugging_voice_protocol.errors import ErrorCode
+from hugging_voice_protocol.events import (
+    MAX_TOOL_ARGUMENTS_CHARS,
+    FunctionTool,
+    NamedToolChoice,
+    ToolChoice,
+    canonical_json,
+)
 
 BASE_PROMPT = (
     "You are having a spoken conversation. Respond naturally and directly. "
@@ -25,15 +35,60 @@ class ReasoningLeakError(GemmaRuntimeError):
     pass
 
 
+class ToolCallValidationError(GemmaRuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: ErrorCode = ErrorCode.MODEL_TOOL_CALL_FAILURE,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True, slots=True)
+class GemmaToolCall:
+    call_id: str
+    name: str
+    arguments: str
+
+
 @dataclass(frozen=True, slots=True)
 class GemmaMessage:
-    role: Literal["system", "user", "assistant"]
-    content: str
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str | None
+    tool_calls: tuple[GemmaToolCall, ...] = ()
+    tool_call_id: str | None = None
+    name: str | None = None
+
+    def as_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            payload["tool_calls"] = [
+                {
+                    "id": call.call_id,
+                    "type": "function",
+                    "function": {"name": call.name, "arguments": call.arguments},
+                }
+                for call in self.tool_calls
+            ]
+        if self.tool_call_id is not None:
+            payload["tool_call_id"] = self.tool_call_id
+        if self.name is not None:
+            payload["name"] = self.name
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
 class TextDelta:
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    call_id: str
+    name: str
+    arguments: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +143,92 @@ class _VisibleTextFilter:
             return remainder
 
 
+class _ToolCallAccumulator:
+    def __init__(self) -> None:
+        self._index: int | None = None
+        self._call_id: str | None = None
+        self._name = ""
+        self._arguments = ""
+
+    @property
+    def present(self) -> bool:
+        return self._index is not None
+
+    def push(self, chunks: object) -> None:
+        if not isinstance(chunks, list):
+            raise ToolCallValidationError("llama-server tool_calls delta must be a list")
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                raise ToolCallValidationError("llama-server emitted malformed tool call data")
+            index = chunk.get("index", 0)
+            if not isinstance(index, int) or index < 0:
+                raise ToolCallValidationError("llama-server emitted an invalid tool call index")
+            if self._index is None:
+                self._index = index
+            elif index != self._index:
+                raise ToolCallValidationError(
+                    "multiple tool calls are not supported",
+                    code=ErrorCode.MULTIPLE_TOOL_CALLS_NOT_SUPPORTED,
+                )
+            identifier = chunk.get("id")
+            if identifier:
+                if not isinstance(identifier, str):
+                    raise ToolCallValidationError("llama-server emitted an invalid tool call ID")
+                if self._call_id is not None and identifier != self._call_id:
+                    raise ToolCallValidationError("tool call ID changed during streaming")
+                self._call_id = identifier
+            function = chunk.get("function") or {}
+            if not isinstance(function, dict):
+                raise ToolCallValidationError("llama-server emitted malformed tool function data")
+            name = function.get("name") or ""
+            arguments = function.get("arguments") or ""
+            if not isinstance(name, str) or not isinstance(arguments, str):
+                raise ToolCallValidationError("tool name and arguments must be strings")
+            self._name += name
+            self._arguments += arguments
+            if len(self._arguments) > MAX_TOOL_ARGUMENTS_CHARS:
+                raise ToolCallValidationError("tool arguments exceed the character limit")
+
+    def finish(self, *, tools: Sequence[FunctionTool], tool_choice: ToolChoice) -> ToolCall:
+        if not self.present:
+            raise ToolCallValidationError("no tool call was accumulated")
+        offered = {tool.function.name for tool in tools}
+        if self._name not in offered:
+            raise ToolCallValidationError(
+                f"model selected unknown tool {self._name!r}",
+                code=ErrorCode.UNKNOWN_TOOL_NAME,
+            )
+        if tool_choice == "none":
+            raise ToolCallValidationError(
+                "model emitted a tool call with tool_choice='none'",
+                code=ErrorCode.INVALID_TOOL_CHOICE,
+            )
+        if isinstance(tool_choice, NamedToolChoice) and self._name != tool_choice.function.name:
+            raise ToolCallValidationError(
+                "model did not honor the named tool choice",
+                code=ErrorCode.INVALID_TOOL_CHOICE,
+            )
+        try:
+            parsed = json.loads(self._arguments)
+        except json.JSONDecodeError as exc:
+            raise ToolCallValidationError(
+                "model emitted malformed tool arguments",
+                code=ErrorCode.MALFORMED_TOOL_ARGUMENTS,
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ToolCallValidationError(
+                "model tool arguments are not a JSON object",
+                code=ErrorCode.MALFORMED_TOOL_ARGUMENTS,
+            )
+        arguments = canonical_json(parsed)
+        if len(arguments) > MAX_TOOL_ARGUMENTS_CHARS:
+            raise ToolCallValidationError("canonical tool arguments exceed the character limit")
+        call_id = self._call_id
+        if call_id is None or re.fullmatch(r"call_[A-Za-z0-9_-]{1,91}", call_id) is None:
+            call_id = f"call_{uuid.uuid4().hex}"
+        return ToolCall(call_id=call_id, name=self._name, arguments=arguments)
+
+
 class GemmaRuntime:
     model_id = "google/gemma-4-31B-it"
     provider = "llama.cpp"
@@ -114,7 +255,7 @@ class GemmaRuntime:
         visible = ""
         async for event in self.stream_response(
             messages=[GemmaMessage(role="user", content="Antworte nur mit OK.")],
-            max_tokens=8,
+            slot_id=0,
         ):
             if isinstance(event, TextDelta):
                 visible += event.text
@@ -128,33 +269,53 @@ class GemmaRuntime:
         instructions: str = "",
         language_instruction: str = "Respond in clear, natural German.",
         system_prompt: str = BASE_PROMPT,
-        max_tokens: int = 256,
-    ) -> AsyncIterator[TextDelta | TextUsage]:
-        if not 1 <= max_tokens <= 256:
-            raise ValueError("Gemma max_tokens must be between 1 and 256")
+        tools: Sequence[FunctionTool] = (),
+        tool_choice: ToolChoice = "auto",
+        slot_id: int = 0,
+    ) -> AsyncIterator[TextDelta | ToolCall | TextUsage]:
+        if slot_id not in {0, 1}:
+            raise ValueError("Gemma slot_id must be 0 or 1")
+        if isinstance(tool_choice, NamedToolChoice):
+            named = tool_choice.function.name
+            if named not in {tool.function.name for tool in tools}:
+                raise ValueError("named tool choice references an unknown tool")
+        if tool_choice == "required" and not tools:
+            raise ValueError("tool_choice='required' requires tools")
+
         request_messages = [{"role": "system", "content": system_prompt}]
         if language_instruction.strip():
             request_messages.append({"role": "system", "content": language_instruction})
         if instructions.strip():
             request_messages.append({"role": "system", "content": instructions})
-        request_messages.extend(
-            {"role": message.role, "content": message.content} for message in messages
-        )
-        payload = {
+        request_messages.extend(message.as_payload() for message in messages)
+        tool_decision = bool(tools) and tool_choice != "none"
+        payload: dict[str, Any] = {
             "model": "gemma-4-31b",
             "messages": request_messages,
             "stream": True,
             "stream_options": {"include_usage": True},
-            "max_tokens": max_tokens,
-            "temperature": 0.7,
+            "max_tokens": 128 if tool_decision else 256,
+            "temperature": 0.2 if tool_decision else 0.7,
+            "cache_prompt": True,
+            "id_slot": slot_id,
             "chat_template_kwargs": {"enable_thinking": False},
         }
+        if tools:
+            payload["tools"] = [tool.model_dump(mode="json") for tool in tools]
+            payload["tool_choice"] = (
+                tool_choice.model_dump(mode="json")
+                if isinstance(tool_choice, NamedToolChoice)
+                else tool_choice
+            )
+            payload["parallel_tool_calls"] = False
 
         async with self._semaphore:
             session = self._ensure_session()
             response: aiohttp.ClientResponse | None = None
             text_filter = _VisibleTextFilter()
+            tool_call = _ToolCallAccumulator()
             reasoning_reported = False
+            visible_seen = False
             try:
                 response = await session.post(
                     f"{self._base_url}/v1/chat/completions",
@@ -192,8 +353,14 @@ class GemmaRuntime:
                     if not choices:
                         continue
                     delta = choices[0].get("delta") or {}
-                    if delta.get("tool_calls"):
-                        raise GemmaRuntimeError("llama-server emitted unsupported tool calls")
+                    chunks = delta.get("tool_calls")
+                    if chunks:
+                        if visible_seen:
+                            raise ToolCallValidationError(
+                                "model mixed visible text and a tool call",
+                                code=ErrorCode.MIXED_MESSAGE_AND_TOOL_OUTPUT,
+                            )
+                        tool_call.push(chunks)
                     if delta.get("reasoning_content"):
                         if not reasoning_reported:
                             self._report_reasoning_violation()
@@ -204,7 +371,19 @@ class GemmaRuntime:
                         self._report_reasoning_violation()
                         reasoning_reported = True
                     if visible:
+                        if tool_call.present:
+                            raise ToolCallValidationError(
+                                "model mixed a tool call and visible text",
+                                code=ErrorCode.MIXED_MESSAGE_AND_TOOL_OUTPUT,
+                            )
+                        visible_seen = True
                         yield TextDelta(visible)
+                if tool_call.present:
+                    yield tool_call.finish(tools=tools, tool_choice=tool_choice)
+                elif tool_choice == "required":
+                    raise ToolCallValidationError(
+                        "model did not emit a tool call with tool_choice='required'"
+                    )
             except asyncio.CancelledError:
                 if response is not None:
                     response.close()

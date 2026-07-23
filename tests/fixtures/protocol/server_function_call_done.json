@@ -1,0 +1,1 @@
+{"type":"response.output_function_call.done","event_id":"evt_204","protocol_version":2,"session_id":"session_alpha","turn_id":"turn_001","turn_revision":0,"generation_id":"gen_001","response_id":"resp_001","item_id":"item_tool_call_1","call_id":"call_add_1","name":"add_numbers","arguments":"{\"a\":19,\"b\":23}"}

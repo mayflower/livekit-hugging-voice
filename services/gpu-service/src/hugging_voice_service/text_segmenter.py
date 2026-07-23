@@ -50,7 +50,7 @@ class SpeechTextSegmenter:
         return [] if not segment else [segment]
 
     def _sentence_boundary(self) -> int | None:
-        for match in re.finditer(r"[.!?:;](?:[\"'»“”)]*)\s+", self._buffer):
+        for match in re.finditer(r"[.!?:;](?:[\"'»“”)]*)(?:\s+|$)", self._buffer):
             end = match.end()
             candidate = self._buffer[:end].strip().lower()
             word = candidate.split()[-1] if candidate.split() else ""

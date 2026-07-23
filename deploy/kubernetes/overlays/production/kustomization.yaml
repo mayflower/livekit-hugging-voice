@@ -5,7 +5,7 @@ resources:
 images:
   - name: livekit-hugging-voice
     newName: livekit-hugging-voice
-    newTag: 0.1.0
+    newTag: 0.2.0
 replicas:
   - name: hugging-voice
     count: 3

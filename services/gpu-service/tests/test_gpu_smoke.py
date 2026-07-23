@@ -84,7 +84,8 @@ async def test_real_german_stt_gemma_and_tts_smoke() -> None:
         assert lifecycle.gemma is not None
         visible = ""
         async for event in cast(GemmaStreamer, lifecycle.gemma).stream_response(
-            messages=[GemmaMessage(role="user", content=transcript)]
+            messages=[GemmaMessage(role="user", content=transcript)],
+            slot_id=0,
         ):
             if isinstance(event, TextDelta):
                 visible += event.text

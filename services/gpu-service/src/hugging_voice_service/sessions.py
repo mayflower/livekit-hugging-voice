@@ -9,7 +9,12 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from hugging_voice_protocol.audio import PCM16_BYTES_PER_SAMPLE
-from hugging_voice_protocol.events import ServerEvent
+from hugging_voice_protocol.events import (
+    FunctionCallConversationItem,
+    FunctionTool,
+    ServerEvent,
+    ToolChoice,
+)
 
 from .cancellation import GenerationCancellation
 from .capacity import CapacityManager, SessionSlot
@@ -91,6 +96,13 @@ class SessionState:
     language: str = "de"
     voice: str = "warm_female"
     voice_instructions: str | None = None
+    tools: tuple[FunctionTool, ...] = ()
+    tool_choice: ToolChoice = "auto"
+    tools_frozen: bool = False
+    context_replay_open: bool = True
+    pending_call: FunctionCallConversationItem | None = None
+    pending_call_emitted_at: float | None = None
+    tool_result_ack_at: float | None = None
     conversation: Conversation = field(default_factory=Conversation)
     input_audio_buffer: BoundedAudioBuffer = field(default_factory=BoundedAudioBuffer)
     current_turn_id: str | None = None

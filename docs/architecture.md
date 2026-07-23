@@ -21,6 +21,10 @@ commit and complete a real generation probe, load/warm Parakeet from its local
 visible Gemma warmup. Partial failure unwinds already-created resources and leaves
 readiness red. Unexpected llama-server exit also revokes readiness immediately.
 
+The Gemma readiness probe is two-step: the pinned stack must emit a structured
+`add_numbers(19, 23)` call, then consume the fixed compatibility result `42` in a
+second generation. This probe is not a production tool executor.
+
 Gemma requests prepend the operator-configured speech system prompt and the selected
 language's response instruction, cap output at 256 tokens, and pass
 `chat_template_kwargs.enable_thinking=false`. Reasoning fields are suppressed, and
@@ -31,6 +35,13 @@ Shared STT and TTS runtimes are protected by small bounded fair schedulers. Gemm
 allows two text generations while keeping request and cancellation state isolated.
 Every output is generation-tagged so cancellation can discard stale text and audio
 without suppressing a subsequent response.
+
+Gemma may instead produce one structured function call. The service ends that
+generation silently, and the plugin exposes it through LiveKit's `function_stream`
+only after `response.done`. LiveKit is the sole executor and returns a bounded
+`FunctionCallOutput`; after the service ACKs the atomic call/result exchange,
+LiveKit requests the final Gemma response and only that response reaches Qwen.
+Both generations retain the session's fixed llama.cpp slot and prompt cache.
 
 WebSocket authentication and exact subprotocol validation happen before atomic
 slot claim. Each connection has bounded inbound and outbound queues and one
@@ -62,6 +73,6 @@ slot to `idle`.
 
 ## Exclusions
 
-No UI, extra WebRTC stack, cloud model, tool calling, arbitrary model selection,
-voice cloning, reference audio, audio enhancement, production fake backend, silent
-fallback, or runtime model download is part of version 1.
+No UI, extra WebRTC stack, cloud model, service-side tool execution, arbitrary
+model selection, voice cloning, reference audio, audio enhancement, production
+fake backend, silent fallback, or runtime model download is part of version 0.2.

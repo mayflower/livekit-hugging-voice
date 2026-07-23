@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 import time
 import uuid
 from collections.abc import Callable
-from typing import cast
+from typing import Literal, cast
 
 from fastapi import WebSocket
 from hugging_voice_protocol.audio import MAX_AUDIO_BASE64_CHARS
@@ -28,7 +30,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .capacity import CapacityManager
 from .lifecycle import LifecyclePhase, ServiceLifecycle
-from .pipeline import GemmaStreamer, VoicePipeline
+from .pipeline import GemmaStreamer, PipelineEventError, VoicePipeline
 from .runtimes.silero import SessionVAD
 from .schedulers.stt import STTRuntime, STTScheduler
 from .schedulers.tts import TTSRuntime, TTSScheduler
@@ -36,12 +38,42 @@ from .sessions import SessionRegistry, SessionState, SessionTransport
 
 logger = logging.getLogger(__name__)
 
-WEBSOCKET_SUBPROTOCOL = "hugging-voice-livekit.v1"
-MAX_INBOUND_MESSAGE_CHARS = MAX_AUDIO_BASE64_CHARS + 8_192
+WEBSOCKET_SUBPROTOCOL = "hugging-voice-livekit.v2"
+MAX_INBOUND_MESSAGE_CHARS = max(MAX_AUDIO_BASE64_CHARS + 8_192, 160 * 1_024)
 
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _validation_error_code(exc: ValidationError) -> ErrorCode:
+    errors = exc.errors()
+    locations = {str(part) for error in errors for part in error.get("loc", ())}
+    messages = " ".join(str(error.get("msg", "")).lower() for error in errors)
+    if "tool_choice" in locations:
+        return ErrorCode.INVALID_TOOL_CHOICE
+    if "tools" in locations or "function" in locations:
+        if "byte limit" in messages or "too long" in messages:
+            return ErrorCode.TOOL_SCHEMA_TOO_LARGE
+        if any(
+            error.get("loc", ())[-1:] == ("type",) and error.get("input") != "function"
+            for error in errors
+        ):
+            return ErrorCode.UNSUPPORTED_TOOL_TYPE
+        return ErrorCode.INVALID_TOOL_CONFIGURATION
+    if "arguments" in locations:
+        return ErrorCode.MALFORMED_TOOL_ARGUMENTS
+    return ErrorCode.INVALID_EVENT
+
+
+def _source_event_id(raw: str) -> str | None:
+    try:
+        event_id = json.loads(raw).get("event_id")
+    except (AttributeError, json.JSONDecodeError):
+        return None
+    if isinstance(event_id, str) and re.fullmatch(r"evt_[A-Za-z0-9_-]{1,96}", event_id):
+        return event_id
+    return None
 
 
 class OutboundQueueFull(RuntimeError):
@@ -49,7 +81,16 @@ class OutboundQueueFull(RuntimeError):
 
 
 class InvalidProtocolEvent(ValueError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: ErrorCode = ErrorCode.INVALID_EVENT,
+        source_event_id: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.source_event_id = source_event_id
 
 
 class InboundQueueFull(RuntimeError):
@@ -258,7 +299,7 @@ class RealtimeService:
         )
         try:
             pipeline = self._new_pipeline(state)
-            await transport.send(self._session_created(session_id))
+            await transport.send(self._session_created(session_id, slot_id=state.slot.index))
             await self._serve_session(websocket, state, pipeline)
         except OutboundQueueFull:
             self.lifecycle.telemetry.websocket_errors.inc()
@@ -278,17 +319,18 @@ class RealtimeService:
                 code=int(CloseCode.SESSION_CONFLICT),
                 reason=ErrorCode.QUEUE_OVERFLOW,
             )
-        except InvalidProtocolEvent:
+        except InvalidProtocolEvent as exc:
             self.lifecycle.telemetry.websocket_errors.inc()
             await self._send_transport_error(
                 transport,
                 session_id=session_id,
-                code=ErrorCode.INVALID_EVENT,
-                message="invalid protocol event",
+                code=exc.code,
+                message=str(exc),
+                source_event_id=exc.source_event_id,
             )
             await transport.close(
                 code=int(CloseCode.PROTOCOL_ERROR),
-                reason=ErrorCode.INVALID_EVENT,
+                reason=exc.code,
             )
         except ValueError as exc:
             self.lifecycle.telemetry.websocket_errors.inc()
@@ -424,8 +466,18 @@ class RealtimeService:
                 try:
                     event = parse_client_event_json(raw)
                     await pipeline.handle_event(event)
+                except PipelineEventError as exc:
+                    await pipeline.send_error(
+                        exc.code,
+                        str(exc),
+                        source_event_id=event.event_id,
+                    )
                 except ValidationError as exc:
-                    raise InvalidProtocolEvent("invalid protocol event") from exc
+                    raise InvalidProtocolEvent(
+                        "invalid protocol event",
+                        code=_validation_error_code(exc),
+                        source_event_id=_source_event_id(raw),
+                    ) from exc
 
         receiver = asyncio.create_task(receive())
         consumer = asyncio.create_task(consume())
@@ -461,7 +513,7 @@ class RealtimeService:
             telemetry=self.lifecycle.telemetry,
         )
 
-    def _session_created(self, session_id: str) -> SessionCreatedEvent:
+    def _session_created(self, session_id: str, *, slot_id: int) -> SessionCreatedEvent:
         lock = self.lifecycle.lock
         if lock is None:
             raise RuntimeError("verified model lock is unavailable")
@@ -480,6 +532,7 @@ class RealtimeService:
             voice=self.settings.speech.default_voice,
             supported_languages=tuple(sorted(self.settings.speech.languages)),
             supported_voices=tuple(sorted(self.settings.speech.voices)),
+            llama_slot_id=cast("Literal[0, 1]", slot_id),
         )
 
     def _authenticated(self, websocket: WebSocket) -> bool:
@@ -520,13 +573,19 @@ class RealtimeService:
         session_id: str,
         code: ErrorCode,
         message: str,
+        source_event_id: str | None = None,
     ) -> None:
         try:
             await transport.send(
                 ErrorEvent(
                     event_id=_id("evt"),
                     session_id=session_id,
-                    error=ErrorPayload(code=code, message=message, retryable=False),
+                    error=ErrorPayload(
+                        code=code,
+                        message=message,
+                        retryable=False,
+                        event_id=source_event_id,
+                    ),
                 )
             )
         except (ConnectionError, OutboundQueueFull):

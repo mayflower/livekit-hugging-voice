@@ -28,7 +28,7 @@
           #0b0d12;
       }
       main {
-        width: min(720px, calc(100% - 28px));
+        width: min(820px, calc(100% - 28px));
         margin: 28px auto;
         padding: clamp(24px, 5vw, 48px);
         border: 1px solid #ffffff1f;
@@ -82,6 +82,19 @@
       .transcript { margin-top: 26px; display: grid; gap: 10px; max-height: 260px; overflow: auto; }
       .line { padding: 12px 14px; border-radius: 14px; background: #ffffff0c; }
       .line strong { display: block; color: #8fdac4; font-size: 0.78rem; margin-bottom: 3px; }
+      .tools { margin-top: 26px; border-top: 1px solid #ffffff16; padding-top: 20px; }
+      .tools-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+      .tools h2 { margin: 0; font-size: 1rem; }
+      .tools-note { color: #7f8999; font-size: 0.78rem; }
+      .tool-calls { display: grid; gap: 9px; margin-top: 12px; }
+      .tool-empty { color: #7f8999; font-size: 0.88rem; padding: 4px 0; }
+      .tool-call { display: grid; gap: 7px; padding: 12px 14px; border-radius: 14px; background: #090c12; border: 1px solid #ffffff12; }
+      .tool-call-header { display: flex; justify-content: space-between; gap: 12px; }
+      .tool-name { color: #a9bfff; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.85rem; }
+      .tool-status { color: #ffc780; font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; }
+      .tool-call.completed .tool-status { color: #8fdac4; }
+      .tool-call.failed .tool-status { color: #ff9ca9; }
+      .tool-detail { margin: 0; color: #aeb8c8; font: 0.78rem/1.5 ui-monospace, SFMono-Regular, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
       footer { margin-top: 24px; color: #7f8999; font-size: 0.78rem; text-align: center; }
       #remote-audio { display: none; }
       @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
@@ -125,6 +138,15 @@
         <button id="disconnect" class="danger hidden">End</button>
       </div>
       <div id="transcript" class="transcript" aria-live="polite"></div>
+      <section class="tools" aria-labelledby="tools-title">
+        <div class="tools-heading">
+          <h2 id="tools-title">Tool calls</h2>
+          <span class="tools-note">add_numbers · count_characters</span>
+        </div>
+        <div id="tool-calls" class="tool-calls" aria-live="polite">
+          <div id="tool-empty" class="tool-empty">No tool called yet.</div>
+        </div>
+      </section>
       <div id="remote-audio"></div>
       <footer>Microphone audio travels to the agent over LiveKit WebRTC.</footer>
     </main>
@@ -141,9 +163,14 @@
       const transcript = document.querySelector('#transcript');
       const warning = document.querySelector('#secure-warning');
       const audioHost = document.querySelector('#remote-audio');
+      const toolCallHost = document.querySelector('#tool-calls');
+      const toolEmpty = document.querySelector('#tool-empty');
       let room;
       let muted = false;
       const transcriptLines = new Map();
+      const toolCallNodes = new Map();
+      const toolEventTopic = 'hugging_voice.tool_call';
+      const textDecoder = new TextDecoder();
 
       if (!window.isSecureContext && !['localhost', '127.0.0.1'].includes(location.hostname)) {
         warning.textContent = 'This page is not a secure browser context. Open it through HTTPS or an SSH localhost tunnel to enable microphone access.';
@@ -169,6 +196,38 @@
         line.querySelector('strong').textContent = speaker;
         line.querySelector('span').textContent = text + (final ? '' : ' …');
       }
+      function isToolEvent(event) {
+        return event?.version === 1 && typeof event.call_id === 'string' &&
+          typeof event.name === 'string' && ['running', 'completed', 'failed'].includes(event.status) &&
+          event.arguments && typeof event.arguments === 'object' && !Array.isArray(event.arguments) &&
+          (event.result === undefined || typeof event.result === 'string');
+      }
+      function upsertToolCall(event) {
+        let card = toolCallNodes.get(event.call_id);
+        if (!card) {
+          card = document.createElement('article');
+          card.className = 'tool-call';
+          const header = document.createElement('div');
+          header.className = 'tool-call-header';
+          const name = document.createElement('strong');
+          name.className = 'tool-name';
+          const status = document.createElement('span');
+          status.className = 'tool-status';
+          const detail = document.createElement('pre');
+          detail.className = 'tool-detail';
+          header.append(name, status);
+          card.append(header, detail);
+          toolCallHost.prepend(card);
+          toolCallNodes.set(event.call_id, card);
+          toolEmpty.classList.add('hidden');
+        }
+        card.className = `tool-call ${event.status}`;
+        card.querySelector('.tool-name').textContent = event.name;
+        card.querySelector('.tool-status').textContent = event.status;
+        const detail = `arguments: ${JSON.stringify(event.arguments)}` +
+          (event.result === undefined ? '' : `\nresult: ${event.result}`);
+        card.querySelector('.tool-detail').textContent = detail;
+      }
 
       function configureRoom() {
         room = new Room({ adaptiveStream: true, dynacast: true });
@@ -184,6 +243,15 @@
           if (track.kind === Track.Kind.Audio) audioHost.appendChild(track.attach());
         });
         room.on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()));
+        room.on(RoomEvent.DataReceived, (payload, participant, kind, topic) => {
+          if (topic !== toolEventTopic || payload.byteLength > 4096) return;
+          try {
+            const event = JSON.parse(textDecoder.decode(payload));
+            if (isToolEvent(event)) upsertToolCall(event);
+          } catch (error) {
+            console.warn('Ignored malformed tool event', error);
+          }
+        });
         room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
           const active = speakers[0];
           orb.classList.toggle('listening', active?.identity === room.localParticipant.identity);

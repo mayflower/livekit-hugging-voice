@@ -44,7 +44,7 @@ def create_app(
             await realtime_service.aclose()
             await service_lifecycle.aclose()
 
-    app = FastAPI(title="Hugging Voice GPU Service", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Hugging Voice GPU Service", version="0.2.0", lifespan=lifespan)
     app.state.lifecycle = service_lifecycle
     app.state.realtime = realtime_service
 

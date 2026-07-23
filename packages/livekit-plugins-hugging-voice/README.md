@@ -1,5 +1,9 @@
 # livekit-plugins-hugging-voice
 
+Version 0.2 supports native LiveKit FunctionTools, Toolsets, and MCPToolsets.
+LiveKit executes them; this plugin transports strict schemas, structured calls,
+and acknowledged results.
+
 This package provides the native LiveKit Agents `RealtimeModel` adapter for the
 authenticated Hugging Voice WebSocket protocol. It does not wrap the OpenAI
 plugin and installs no model, ML, or CUDA dependencies.

@@ -96,6 +96,9 @@ async def test_web_app_serves_ui_and_rejects_cross_origin_token_requests() -> No
         assert index.status == 200
         assert "setMicrophoneEnabled" in html
         assert "lk.transcription" in html
+        assert "RoomEvent.DataReceived" in html
+        assert "hugging_voice.tool_call" in html
+        assert "add_numbers · count_characters" in html
         assert "Content-Security-Policy" in index.headers
         inline_script = re.search(r"<script>(.*)</script>", html, flags=re.DOTALL)
         assert inline_script is not None
@@ -155,3 +158,91 @@ def test_agent_dispatch_metadata_overrides_environment(monkeypatch: pytest.Monke
 def test_agent_dispatch_metadata_rejects_unknown_options() -> None:
     with pytest.raises(ValueError, match="unknown speech option"):
         agent_demo.speech_options('{"locale":"en"}')
+
+
+def test_demo_agent_exposes_two_native_function_tools() -> None:
+    assert agent_demo.add_numbers.info.name == "add_numbers"
+    assert agent_demo.count_characters.info.name == "count_characters"
+
+
+@pytest.mark.asyncio
+async def test_demo_tools_publish_visible_lifecycle_events() -> None:
+    published: list[tuple[str, bool, str]] = []
+
+    class LocalParticipant:
+        async def publish_data(self, payload: str, *, reliable: bool, topic: str) -> None:
+            published.append((payload, reliable, topic))
+
+    class Room:
+        local_participant = LocalParticipant()
+
+    class Userdata:
+        room = Room()
+
+    class FunctionCall:
+        def __init__(self, call_id: str, name: str) -> None:
+            self.call_id = call_id
+            self.name = name
+
+    class Context:
+        def __init__(self, call_id: str, name: str) -> None:
+            self.userdata = Userdata()
+            self.function_call = FunctionCall(call_id, name)
+
+    assert await agent_demo.add_numbers(Context("call-1", "add_numbers"), a=2, b=3) == "5"
+    assert (
+        await agent_demo.count_characters(Context("call-2", "count_characters"), text="Grüße")
+        == "5"
+    )
+
+    events = [json.loads(payload) for payload, _, _ in published]
+    assert all(reliable for _, reliable, _ in published)
+    assert all(topic == "hugging_voice.tool_call" for _, _, topic in published)
+    assert [(event["call_id"], event["status"]) for event in events] == [
+        ("call-1", "running"),
+        ("call-1", "completed"),
+        ("call-2", "running"),
+        ("call-2", "completed"),
+    ]
+    assert events[1] == {
+        "version": 1,
+        "call_id": "call-1",
+        "name": "add_numbers",
+        "status": "completed",
+        "arguments": {"a": 2, "b": 3},
+        "result": "5",
+    }
+    assert events[3] == {
+        "version": 1,
+        "call_id": "call-2",
+        "name": "count_characters",
+        "status": "completed",
+        "arguments": {"text": "Grüße"},
+        "result": "5",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_display_event_rejects_oversized_payload() -> None:
+    class LocalParticipant:
+        async def publish_data(self, payload: str, *, reliable: bool, topic: str) -> None:
+            raise AssertionError("oversized payload must not be published")
+
+    class Room:
+        local_participant = LocalParticipant()
+
+    class Userdata:
+        room = Room()
+
+    class FunctionCall:
+        call_id = "call-large"
+        name = "test"
+
+    class Context:
+        userdata = Userdata()
+        function_call = FunctionCall()
+
+    with pytest.raises(ValueError, match="size limit"):
+        await agent_demo._publish_tool_event(
+            Context(), status="running", arguments={"text": "x" * 4_096}
+        )

@@ -30,6 +30,46 @@ class ServiceTelemetry:
             "Reasoning fields or leading thinking blocks suppressed from visible output",
             registry=self.registry,
         )
+        self.tool_call_generations = Counter(
+            "hugging_voice_tool_call_generations_total",
+            "Completed structured Gemma tool-call generations",
+            registry=self.registry,
+        )
+        self.tool_call_parse_failures = Counter(
+            "hugging_voice_tool_call_parse_failures_total",
+            "Rejected malformed model tool calls",
+            registry=self.registry,
+        )
+        self.tool_call_rejections = Counter(
+            "hugging_voice_tool_call_rejections_total",
+            "Rejected tool calls or tool results",
+            registry=self.registry,
+        )
+        self.tool_decision_seconds = Histogram(
+            "hugging_voice_tool_decision_seconds",
+            "Gemma generation start to validated tool call",
+            registry=self.registry,
+        )
+        self.tool_result_wait_seconds = Histogram(
+            "hugging_voice_tool_result_wait_seconds",
+            "Tool call emission to acknowledged result",
+            registry=self.registry,
+        )
+        self.tool_result_to_first_text_seconds = Histogram(
+            "hugging_voice_tool_result_to_first_text_seconds",
+            "Tool result acknowledgement to first final text",
+            registry=self.registry,
+        )
+        self.tool_result_to_first_audio_seconds = Histogram(
+            "hugging_voice_tool_result_to_first_audio_seconds",
+            "Tool result acknowledgement to first final audio",
+            registry=self.registry,
+        )
+        self.tool_schema_bytes = Gauge(
+            "hugging_voice_tool_schema_bytes",
+            "Canonical bytes in the active session tool schemas",
+            registry=self.registry,
+        )
         self.sessions_active = Gauge(
             "hugging_voice_sessions_active",
             "Connected active sessions",

@@ -50,6 +50,35 @@ def test_empty_benchmark_does_not_invent_targets(tmp_path: Path) -> None:
     assert "No latency observations were recorded" in markdown
 
 
+def test_tool_error_rate_and_concurrency_groups_are_specific(tmp_path: Path) -> None:
+    module = _load_summary_module()
+    report = module.summarize_records(
+        [
+            {
+                "record_type": "metadata",
+                "metadata": {"session_concurrency": 2},
+            },
+            {
+                "record_type": "turn",
+                "tool_call_emitted_at": 1.0,
+                "metrics": {"speech_stop_to_tool_call_seconds": 0.5},
+            },
+            {"record_type": "error", "message": "unrelated transport failure"},
+            {
+                "record_type": "error",
+                "message": "tool turn failed",
+                "tool_call_error": True,
+            },
+        ],
+        tmp_path / "raw.jsonl",
+    )
+    assert report["tool_call_error_rate"] == 0.5
+    assert (
+        report["metrics_by_session_concurrency"]["2"]["speech_stop_to_tool_call_seconds"]["p50"]
+        == 0.5
+    )
+
+
 def test_prometheus_summary_uses_snapshot_deltas(tmp_path: Path) -> None:
     module = _load_summary_module()
     before = """\

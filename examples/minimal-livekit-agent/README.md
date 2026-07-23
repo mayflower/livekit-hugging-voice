@@ -1,5 +1,11 @@
 # Minimal LiveKit Agent
 
+The worker registers two real LiveKit FunctionTools: `add_numbers` adds two
+integers and `count_characters` counts the characters in a short text. Ask for
+either operation to exercise the silent call, LiveKit execution, ACK, and final
+voice. The browser shows each call's bounded arguments, status, and result in a
+small tool-call history delivered over a reliable LiveKit data message.
+
 This example uses one native `AgentSession(llm=RealtimeModel(...))`. It does not
 configure separate STT, LLM, or TTS providers and has no cloud fallback.
 

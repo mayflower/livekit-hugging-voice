@@ -4,12 +4,93 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Final, Literal
 
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, cli
+from livekit import rtc
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    RunContext,
+    cli,
+    function_tool,
+)
 from livekit.plugins import hugging_voice
 
 server = AgentServer()
+TOOL_EVENT_TOPIC: Final = "hugging_voice.tool_call"
+MAX_TOOL_INTEGER: Final = 1_000_000_000
+MAX_COUNTED_TEXT_LENGTH: Final = 500
+MAX_TOOL_EVENT_BYTES: Final = 4_096
+
+
+@dataclass(frozen=True, slots=True)
+class DemoContext:
+    room: rtc.Room
+
+
+async def _publish_tool_event(
+    context: RunContext[DemoContext],
+    *,
+    status: Literal["running", "completed", "failed"],
+    arguments: Mapping[str, int | str],
+    result: str | None = None,
+) -> None:
+    event = {
+        "version": 1,
+        "call_id": context.function_call.call_id,
+        "name": context.function_call.name,
+        "status": status,
+        "arguments": arguments,
+    }
+    if result is not None:
+        event["result"] = result
+    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+    if len(payload.encode("utf-8")) > MAX_TOOL_EVENT_BYTES:
+        raise ValueError("tool display event exceeds its size limit")
+    await context.userdata.room.local_participant.publish_data(
+        payload,
+        reliable=True,
+        topic=TOOL_EVENT_TOPIC,
+    )
+
+
+@function_tool
+async def add_numbers(context: RunContext[DemoContext], a: int, b: int) -> str:
+    """Add two integers and return the exact result."""
+
+    in_range = abs(a) <= MAX_TOOL_INTEGER and abs(b) <= MAX_TOOL_INTEGER
+    arguments: dict[str, int | str] = {
+        "a": a if abs(a) <= MAX_TOOL_INTEGER else "out_of_range",
+        "b": b if abs(b) <= MAX_TOOL_INTEGER else "out_of_range",
+    }
+    await _publish_tool_event(context, status="running", arguments=arguments)
+    if not in_range:
+        message = f"integers must be between {-MAX_TOOL_INTEGER} and {MAX_TOOL_INTEGER}"
+        await _publish_tool_event(context, status="failed", arguments=arguments, result=message)
+        raise ValueError(message)
+    result = str(a + b)
+    await _publish_tool_event(context, status="completed", arguments=arguments, result=result)
+    return result
+
+
+@function_tool
+async def count_characters(context: RunContext[DemoContext], text: str) -> str:
+    """Count every Unicode character in a short text, including spaces."""
+
+    text_is_bounded = len(text) <= MAX_COUNTED_TEXT_LENGTH
+    arguments = {"text": text if text_is_bounded else f"{text[:MAX_COUNTED_TEXT_LENGTH]}…"}
+    await _publish_tool_event(context, status="running", arguments=arguments)
+    if not text_is_bounded:
+        message = f"text must contain at most {MAX_COUNTED_TEXT_LENGTH} characters"
+        await _publish_tool_event(context, status="failed", arguments=arguments, result=message)
+        raise ValueError(message)
+    result = str(len(text))
+    await _publish_tool_event(context, status="completed", arguments=arguments, result=result)
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,14 +132,19 @@ async def entrypoint(ctx: JobContext) -> None:
             "You are a helpful voice assistant. Keep answers brief and natural.",
         ),
     )
-    session: AgentSession[dict[str, object]] = AgentSession(llm=model)
+    session: AgentSession[DemoContext] = AgentSession(
+        llm=model,
+        userdata=DemoContext(room=ctx.room),
+    )
     await session.start(
         room=ctx.room,
         agent=Agent(
             instructions=os.getenv(
                 "HUGGING_VOICE_AGENT_INSTRUCTIONS",
-                "Have a friendly conversation. Do not use tools or Markdown.",
-            )
+                "Use add_numbers for additions and count_characters when asked for "
+                "the length of a text. Answer briefly in German. Do not use Markdown.",
+            ),
+            tools=[add_numbers, count_characters],
         ),
     )
 

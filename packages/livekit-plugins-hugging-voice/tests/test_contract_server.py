@@ -11,6 +11,7 @@ from hugging_voice_protocol.audio import decode_pcm16_base64
 from hugging_voice_protocol.errors import ErrorCode
 from hugging_voice_protocol.events import (
     ClientEvent,
+    ConversationItemCreatedEvent,
     ConversationItemCreateEvent,
     ErrorEvent,
     ErrorPayload,
@@ -24,12 +25,14 @@ from hugging_voice_protocol.events import (
     ResponseDoneEvent,
     ResponseOutputAudioDeltaEvent,
     ResponseOutputAudioDoneEvent,
+    ResponseOutputFunctionCallDoneEvent,
     ResponseOutputTextDeltaEvent,
     ResponseOutputTextDoneEvent,
     ResponseReason,
     ResponseStatus,
     SessionCreatedEvent,
     SessionModels,
+    SessionUpdatedEvent,
     SessionUpdateEvent,
     SpeechStartedEvent,
     SpeechStoppedEvent,
@@ -38,7 +41,13 @@ from hugging_voice_protocol.events import (
 )
 from livekit import rtc
 from livekit.agents import Agent, AgentSession, APIConnectOptions
-from livekit.agents.llm import ChatContext, RealtimeError
+from livekit.agents.llm import (
+    ChatContext,
+    FunctionCallOutput,
+    MessageGeneration,
+    RealtimeError,
+    function_tool,
+)
 from livekit.plugins.hugging_voice.realtime import PartialTranscription, RealtimeModel
 
 REVISION = "c" * 40
@@ -67,6 +76,7 @@ class ContractServer:
     pause_response: bool = False
     default_language: str = "de"
     default_voice: str = "warm_female"
+    tool_first: bool = False
 
     def __post_init__(self) -> None:
         self.events: asyncio.Queue[ClientEvent] = asyncio.Queue()
@@ -95,7 +105,7 @@ class ContractServer:
 
     async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
         assert request.headers["Authorization"] == "Bearer contract-secret"
-        websocket = web.WebSocketResponse(protocols=("hugging-voice-livekit.v1",))
+        websocket = web.WebSocketResponse(protocols=("hugging-voice-livekit.v2",))
         await websocket.prepare(request)
         await websocket.send_str(
             SessionCreatedEvent(
@@ -120,6 +130,23 @@ class ContractServer:
                 continue
             event = parse_client_event_json(message.data)
             await self.events.put(event)
+            if isinstance(event, SessionUpdateEvent):
+                await websocket.send_str(
+                    SessionUpdatedEvent(
+                        event_id=f"evt_ack_{event.event_id}",
+                        session_id=event.session_id,
+                        source_event_id=event.event_id,
+                    ).model_dump_json()
+                )
+            elif isinstance(event, ConversationItemCreateEvent):
+                await websocket.send_str(
+                    ConversationItemCreatedEvent(
+                        event_id=f"evt_ack_{event.event_id}",
+                        session_id=event.session_id,
+                        source_event_id=event.event_id,
+                        item_id=event.item.id,
+                    ).model_dump_json()
+                )
             if (
                 event.type == "session.update"
                 and not sent_transcription
@@ -179,6 +206,24 @@ class ContractServer:
     async def _send_response(self, websocket: web.WebSocketResponse, generation: int) -> None:
         fields = common_response_fields(generation)
         await websocket.send_str(ResponseCreatedEvent(**fields).model_dump_json())
+        if self.tool_first and generation == 1:
+            await websocket.send_str(
+                ResponseOutputFunctionCallDoneEvent(
+                    **fields,
+                    call_id="call_add_1",
+                    name="add_numbers",
+                    arguments='{"a":19,"b":23}',
+                ).model_dump_json()
+            )
+            await websocket.send_str(
+                ResponseDoneEvent(
+                    **fields,
+                    status=ResponseStatus.COMPLETED,
+                    reason=ResponseReason.TOOL_CALL,
+                    usage=Usage(input_text_tokens=4, output_text_tokens=8, total_text_tokens=12),
+                ).model_dump_json()
+            )
+            return
         if self.pause_response:
             await self.continue_response.wait()
         events = [
@@ -309,7 +354,7 @@ async def test_native_session_maps_transcription_text_audio_and_metrics(
 
 
 @pytest.mark.asyncio
-async def test_modalities_are_available_before_response_streams_finish(
+async def test_message_generation_is_lazy_until_first_output(
     unused_tcp_port: int,
 ) -> None:
     server = ContractServer(unused_tcp_port, send_transcription=False, pause_response=True)
@@ -318,9 +363,14 @@ async def test_modalities_are_available_before_response_streams_finish(
     session = model.session()
     try:
         generation = await asyncio.wait_for(session.generate_reply(), timeout=1.0)
-        message = await anext(generation.message_stream.__aiter__())
-        assert await asyncio.wait_for(message.modalities, timeout=0.1) == ["text", "audio"]
+        pending_message: asyncio.Future[MessageGeneration] = asyncio.ensure_future(
+            anext(generation.message_stream.__aiter__())
+        )
+        await asyncio.sleep(0)
+        assert not pending_message.done()
         server.continue_response.set()
+        message = await asyncio.wait_for(pending_message, timeout=1.0)
+        assert await asyncio.wait_for(message.modalities, timeout=0.1) == ["text", "audio"]
         assert len([frame async for frame in message.audio_stream]) == 1
     finally:
         server.continue_response.set()
@@ -362,11 +412,17 @@ async def test_audio_commit_instruction_and_append_only_context_map_to_client_ev
         assert isinstance(update, SessionUpdateEvent)
         assert update.session.instructions == "Neue Anweisung"
 
+        session.update_options(tool_choice="none")
+        choice_update = await wait_client_event(server, "session.update")
+        assert isinstance(choice_update, SessionUpdateEvent)
+        assert choice_update.session.tool_choice == "none"
+
         context = ChatContext.empty()
         context.add_message(id="livekit-user", role="user", content="Kontext")
         await session.update_chat_ctx(context)
         replay = await wait_client_event(server, "conversation.item.create")
         assert isinstance(replay, ConversationItemCreateEvent)
+        assert replay.item.type == "message"
         assert replay.item.content == "Kontext"
 
         changed = ChatContext.empty()
@@ -438,6 +494,87 @@ async def test_agent_session_starts_with_only_native_realtime_model(
 
 
 @pytest.mark.asyncio
+async def test_function_call_is_silent_and_result_is_acked_before_final_reply(
+    unused_tcp_port: int,
+) -> None:
+    @function_tool
+    async def add_numbers(a: int, b: int) -> str:
+        """Add two integers."""
+
+        return str(a + b)
+
+    server = ContractServer(unused_tcp_port, send_transcription=False, tool_first=True)
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    session = model.session()
+    try:
+        await session.update_tools([add_numbers])
+        generation = await asyncio.wait_for(session.generate_reply(), timeout=1.0)
+        calls = [call async for call in generation.function_stream]
+        assert [message async for message in generation.message_stream] == []
+        assert len(calls) == 1 and calls[0].arguments == '{"a":19,"b":23}'
+        updated = session.chat_ctx.copy()
+        updated.insert(
+            FunctionCallOutput(
+                call_id=calls[0].call_id,
+                name=calls[0].name,
+                output="42",
+                is_error=False,
+            )
+        )
+        await asyncio.wait_for(session.update_chat_ctx(updated), timeout=1.0)
+        final = await asyncio.wait_for(session.generate_reply(tool_choice="none"), timeout=1.0)
+        message = await anext(final.message_stream.__aiter__())
+        assert "".join([delta async for delta in message.text_stream]) == "Guten Tag. "
+        assert len([frame async for frame in message.audio_stream]) == 1
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_session_executes_native_tool_and_requests_final_reply(
+    unused_tcp_port: int,
+) -> None:
+    @function_tool
+    async def add_numbers(a: int, b: int) -> str:
+        """Add two integers."""
+
+        return str(a + b)
+
+    server = ContractServer(unused_tcp_port, send_transcription=False, tool_first=True)
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    agent_session: AgentSession[dict[str, Any]] = AgentSession(llm=model)
+    executed = asyncio.Event()
+    agent_session.on("function_tools_executed", lambda event: executed.set())
+    try:
+        await agent_session.start(
+            agent=Agent(instructions="Use the tool.", tools=[add_numbers]), record=False
+        )
+        handle = agent_session.generate_reply(user_input="What is 19 plus 23?")
+        await asyncio.wait_for(handle, timeout=3.0)
+        await asyncio.wait_for(executed.wait(), timeout=1.0)
+        events = []
+        while not server.events.empty():
+            events.append(server.events.get_nowait())
+        outputs = [
+            event.item
+            for event in events
+            if isinstance(event, ConversationItemCreateEvent)
+            and event.item.type == "function_call_output"
+        ]
+        assert len(outputs) == 1
+        assert outputs[0].call_id == "call_add_1"
+        assert outputs[0].output == "42"
+        assert server._response_count == 2
+    finally:
+        await agent_session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
 async def test_omitted_speech_options_inherit_server_defaults(unused_tcp_port: int) -> None:
     server = ContractServer(
         unused_tcp_port,
@@ -485,7 +622,7 @@ class CapacityServer:
 
     async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
         self.hits += 1
-        websocket = web.WebSocketResponse(protocols=("hugging-voice-livekit.v1",))
+        websocket = web.WebSocketResponse(protocols=("hugging-voice-livekit.v2",))
         await websocket.prepare(request)
         await websocket.send_str(
             ErrorEvent(
@@ -559,7 +696,7 @@ class ReconnectServer:
     async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
         self.connections += 1
         connection = self.connections
-        websocket = web.WebSocketResponse(protocols=("hugging-voice-livekit.v1",))
+        websocket = web.WebSocketResponse(protocols=("hugging-voice-livekit.v2",))
         await websocket.prepare(request)
         await (self.allow_first if connection == 1 else self.allow_second).wait()
         await websocket.send_str(
@@ -582,12 +719,27 @@ class ReconnectServer:
             self.types.setdefault(connection, []).append(event.type)
             if isinstance(event, SessionUpdateEvent):
                 self.updates[connection] = event
+                await websocket.send_str(
+                    SessionUpdatedEvent(
+                        event_id=f"evt_reconnect_update_{connection}",
+                        session_id=event.session_id,
+                        source_event_id=event.event_id,
+                    ).model_dump_json()
+                )
             elif isinstance(event, ConversationItemCreateEvent):
                 self.replays.setdefault(connection, []).append(event)
                 if connection == 1:
                     self.first_replay.set()
                 else:
                     self.second_replay.set()
+                await websocket.send_str(
+                    ConversationItemCreatedEvent(
+                        event_id=f"evt_reconnect_item_{connection}",
+                        session_id=event.session_id,
+                        source_event_id=event.event_id,
+                        item_id=event.item.id,
+                    ).model_dump_json()
+                )
             elif event.type == "response.create" and connection == 1:
                 await websocket.close(code=1012)
         return websocket
@@ -618,7 +770,7 @@ class FlappingServer:
 
     async def _websocket(self, request: web.Request) -> web.WebSocketResponse:
         self.connections += 1
-        websocket = web.WebSocketResponse(protocols=("hugging-voice-livekit.v1",))
+        websocket = web.WebSocketResponse(protocols=("hugging-voice-livekit.v2",))
         await websocket.prepare(request)
         await websocket.send_str(
             SessionCreatedEvent(
@@ -696,6 +848,7 @@ async def test_reconnect_fails_active_request_replays_context_and_buffers_no_aud
         await asyncio.wait_for(reconnected.wait(), timeout=1.0)
         await asyncio.wait_for(server.second_replay.wait(), timeout=1.0)
 
+        assert server.replays[1][0].item.type == "message"
         assert server.replays[1][0].item.content == "Bestätigter Kontext"
         assert server.replays[2][0].item.id == server.replays[1][0].item.id
         assert server.updates[1].session.instructions == "initial"
@@ -764,11 +917,8 @@ async def test_interrupt_before_first_output_closes_generation_exactly_once(
     session = model.session()
     try:
         generation = await asyncio.wait_for(session.generate_reply(), timeout=1.0)
-        message = await anext(generation.message_stream.__aiter__())
         session.interrupt()
-        assert [delta async for delta in message.text_stream] == []
-        assert [frame async for frame in message.audio_stream] == []
-        assert await message.modalities == ["text", "audio"]
+        assert [message async for message in generation.message_stream] == []
         await wait_client_event(server, "response.cancel")
         session.interrupt()
         await asyncio.sleep(0)

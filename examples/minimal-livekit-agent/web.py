@@ -188,7 +188,7 @@ async def _index(request: web.Request) -> web.FileResponse:
             "Cache-Control": "no-store",
             "Content-Security-Policy": (
                 "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net "
-                "'sha256-D0z/DmnKPg1Q+CVk9cDu2kDBAX4D8bUQbF2RGarKLNw='; "
+                "'sha256-GpL5u/5a0IIB6Fw1LzFc/+42IadA17KRLsmLn7v4ZnM='; "
                 "style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; "
                 "media-src 'self' blob:; img-src 'self' data:"
             ),

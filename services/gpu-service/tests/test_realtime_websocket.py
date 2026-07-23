@@ -104,9 +104,11 @@ class TestGemma:
         instructions: str = "",
         language_instruction: str = "",
         system_prompt: str = "",
-        max_tokens: int = 256,
+        tools: object = (),
+        tool_choice: object = "auto",
+        slot_id: int = 0,
     ) -> AsyncIterator[TextDelta | TextUsage]:
-        del instructions, max_tokens
+        del instructions, tools, tool_choice, slot_id
         self.calls.append((language_instruction, system_prompt))
         assert messages[-1].content == "Hallo"
         yield TextDelta("Guten Tag. ")
@@ -127,10 +129,13 @@ class CanaryGemma(TestGemma):
         instructions: str = "",
         language_instruction: str = "",
         system_prompt: str = "",
-        max_tokens: int = 256,
+        tools: object = (),
+        tool_choice: object = "auto",
+        slot_id: int = 0,
     ) -> AsyncIterator[TextDelta | TextUsage]:
-        del instructions, language_instruction, system_prompt, max_tokens
+        del instructions, language_instruction, system_prompt, tools, tool_choice, slot_id
         canary = messages[-1].content
+        assert canary is not None
         if "ALPHA" in canary:
             await asyncio.sleep(0.1)
             text = "ALPHA. "
@@ -245,9 +250,10 @@ def send_context_and_response(websocket: Any, session_id: str, canary: str) -> N
         {
             "type": "conversation.item.create",
             "event_id": f"evt_context_{canary.lower()}",
-            "protocol_version": 1,
+            "protocol_version": 2,
             "session_id": session_id,
             "item": {
+                "type": "message",
                 "id": f"item_context_{canary.lower()}",
                 "role": "user",
                 "content": canary,
@@ -258,7 +264,7 @@ def send_context_and_response(websocket: Any, session_id: str, canary: str) -> N
         {
             "type": "response.create",
             "event_id": f"evt_response_{canary.lower()}",
-            "protocol_version": 1,
+            "protocol_version": 2,
             "session_id": session_id,
         }
     )
@@ -311,7 +317,7 @@ def test_authenticated_handshake_and_complete_text_audio_response(tmp_path: Path
         with client.websocket_connect(
             "/v1/realtime",
             headers=headers(),
-            subprotocols=["hugging-voice-livekit.v1"],
+            subprotocols=["hugging-voice-livekit.v2"],
         ) as websocket:
             created = websocket.receive_json()
             assert created["type"] == "session.created"
@@ -326,16 +332,21 @@ def test_authenticated_handshake_and_complete_text_audio_response(tmp_path: Path
                 {
                     "type": "conversation.item.create",
                     "event_id": "evt_context",
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "session_id": session_id,
-                    "item": {"id": "item_context", "role": "user", "content": "Hallo"},
+                    "item": {
+                        "type": "message",
+                        "id": "item_context",
+                        "role": "user",
+                        "content": "Hallo",
+                    },
                 }
             )
             websocket.send_json(
                 {
                     "type": "response.create",
                     "event_id": "evt_response",
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "session_id": session_id,
                 }
             )
@@ -345,6 +356,7 @@ def test_authenticated_handshake_and_complete_text_audio_response(tmp_path: Path
                 events.append(websocket.receive_json())
 
             assert [event["type"] for event in events] == [
+                "conversation.item.created",
                 "response.created",
                 "response.output_text.delta",
                 "response.output_text.done",
@@ -354,7 +366,7 @@ def test_authenticated_handshake_and_complete_text_audio_response(tmp_path: Path
             ]
             assert events[-1]["status"] == "completed"
             assert events[-1]["usage"]["total_text_tokens"] == 5
-            assert events[3]["sequence"] == 0
+            assert events[4]["sequence"] == 0
 
 
 def test_session_speech_configuration_reaches_llm_and_tts(tmp_path: Path) -> None:
@@ -366,7 +378,7 @@ def test_session_speech_configuration_reaches_llm_and_tts(tmp_path: Path) -> Non
         with client.websocket_connect(
             "/v1/realtime",
             headers=headers(),
-            subprotocols=["hugging-voice-livekit.v1"],
+            subprotocols=["hugging-voice-livekit.v2"],
         ) as websocket:
             created = websocket.receive_json()
             assert created["supported_languages"] == ["de", "en", "fr", "it"]
@@ -382,7 +394,7 @@ def test_session_speech_configuration_reaches_llm_and_tts(tmp_path: Path) -> Non
                 {
                     "type": "session.update",
                     "event_id": "evt_options",
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "session_id": session_id,
                     "session": {
                         "language": "en",
@@ -407,7 +419,7 @@ def test_auth_and_subprotocol_fail_before_any_capacity_claim(tmp_path: Path) -> 
     with TestClient(make_test_app(service)) as client:
         with client.websocket_connect(
             "/v1/realtime",
-            subprotocols=["hugging-voice-livekit.v1"],
+            subprotocols=["hugging-voice-livekit.v2"],
         ) as websocket:
             assert websocket.receive_json()["error"]["code"] == "authentication_failed"
             try:
@@ -433,14 +445,14 @@ def test_invalid_event_is_structured_and_closed_as_protocol_error(tmp_path: Path
         with client.websocket_connect(
             "/v1/realtime",
             headers=headers(),
-            subprotocols=["hugging-voice-livekit.v1"],
+            subprotocols=["hugging-voice-livekit.v2"],
         ) as websocket:
             created = websocket.receive_json()
             websocket.send_json(
                 {
                     "type": "not.supported",
                     "event_id": "evt_bad",
-                    "protocol_version": 1,
+                    "protocol_version": 2,
                     "session_id": created["session_id"],
                 }
             )
@@ -458,7 +470,7 @@ def test_draining_service_rejects_new_sessions_with_1012(tmp_path: Path) -> None
         with client.websocket_connect(
             "/v1/realtime",
             headers=headers(),
-            subprotocols=["hugging-voice-livekit.v1"],
+            subprotocols=["hugging-voice-livekit.v2"],
         ) as websocket:
             assert websocket.receive_json()["error"]["code"] == "service_draining"
             try:
@@ -473,19 +485,19 @@ def test_third_connection_is_structurally_rejected_without_a_wait_queue(tmp_path
         with client.websocket_connect(
             "/v1/realtime",
             headers=headers(),
-            subprotocols=["hugging-voice-livekit.v1"],
+            subprotocols=["hugging-voice-livekit.v2"],
         ) as first:
             assert first.receive_json()["type"] == "session.created"
             with client.websocket_connect(
                 "/v1/realtime",
                 headers=headers(),
-                subprotocols=["hugging-voice-livekit.v1"],
+                subprotocols=["hugging-voice-livekit.v2"],
             ) as second:
                 assert second.receive_json()["type"] == "session.created"
                 with client.websocket_connect(
                     "/v1/realtime",
                     headers=headers(),
-                    subprotocols=["hugging-voice-livekit.v1"],
+                    subprotocols=["hugging-voice-livekit.v2"],
                 ) as third:
                     error = third.receive_json()
                     assert error["error"]["code"] == "session_limit_reached"
@@ -496,7 +508,7 @@ def test_third_connection_is_structurally_rejected_without_a_wait_queue(tmp_path
             with client.websocket_connect(
                 "/v1/realtime",
                 headers=headers(),
-                subprotocols=["hugging-voice-livekit.v1"],
+                subprotocols=["hugging-voice-livekit.v2"],
             ) as replacement:
                 assert replacement.receive_json()["type"] == "session.created"
 
@@ -507,17 +519,19 @@ def test_two_canary_sessions_are_isolated_and_one_cancel_cannot_cross(tmp_path: 
         with client.websocket_connect(
             "/v1/realtime",
             headers=headers(),
-            subprotocols=["hugging-voice-livekit.v1"],
+            subprotocols=["hugging-voice-livekit.v2"],
         ) as alpha:
             alpha_session = alpha.receive_json()["session_id"]
             with client.websocket_connect(
                 "/v1/realtime",
                 headers=headers(),
-                subprotocols=["hugging-voice-livekit.v1"],
+                subprotocols=["hugging-voice-livekit.v2"],
             ) as beta:
                 beta_session = beta.receive_json()["session_id"]
                 send_context_and_response(alpha, alpha_session, "ALPHA")
                 send_context_and_response(beta, beta_session, "BETA")
+                assert alpha.receive_json()["type"] == "conversation.item.created"
+                assert beta.receive_json()["type"] == "conversation.item.created"
                 alpha_created = alpha.receive_json()
                 beta_created = beta.receive_json()
                 assert alpha_created["type"] == beta_created["type"] == "response.created"
@@ -526,7 +540,7 @@ def test_two_canary_sessions_are_isolated_and_one_cancel_cannot_cross(tmp_path: 
                     {
                         "type": "response.cancel",
                         "event_id": "evt_cancel_alpha",
-                        "protocol_version": 1,
+                        "protocol_version": 2,
                         "session_id": alpha_session,
                         "response_id": alpha_created["response_id"],
                         "generation_id": alpha_created["generation_id"],

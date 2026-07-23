@@ -1,3 +1,9 @@
+# Historisches Bootstrap-Prompt-Pack für Version 0.1
+
+Dieses Dokument ist das historische Bootstrap-Prompt-Pack für Version 0.1.
+Die damaligen No-Tool-Calling-Grenzen sind für Version 0.2 durch `AGENTS.md` und
+`docs/tool-calling.md` ersetzt. Andere Architekturgrenzen bleiben gültig.
+
 # Codex Prompt Pack: `livekit-hugging-voice`
 
 **Lokaler Hugging-Voice-GPU-Service und eigener LiveKit-Agents-`RealtimeModel`-Adapter**

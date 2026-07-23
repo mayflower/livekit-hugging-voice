@@ -19,6 +19,11 @@ CLIENT_METRICS = {
     "speech_stop_to_first_audio_frame_seconds",
     "barge_in_to_last_old_audio_frame_seconds",
     "response_duration_seconds",
+    "speech_stop_to_tool_call_seconds",
+    "tool_duration_seconds",
+    "tool_result_ack_to_final_first_text_seconds",
+    "tool_result_ack_to_final_first_audio_seconds",
+    "speech_stop_to_final_first_audio_seconds",
 }
 SERVICE_HISTOGRAMS = {
     "hugging_voice_stt_queue_seconds",
@@ -33,6 +38,10 @@ SERVICE_HISTOGRAMS = {
     "hugging_voice_tts_audio_seconds",
     "hugging_voice_first_audio_latency_seconds",
     "hugging_voice_barge_in_stop_latency_seconds",
+    "hugging_voice_tool_decision_seconds",
+    "hugging_voice_tool_result_wait_seconds",
+    "hugging_voice_tool_result_to_first_text_seconds",
+    "hugging_voice_tool_result_to_first_audio_seconds",
 }
 BUCKET_RE = re.compile(r'^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)_bucket\{le="(?P<le>[^"]+)"\}$')
 LOAD_RE = re.compile(r'^hugging_voice_model_loads_total\{model="(?P<model>[^"]+)"\}$')
@@ -153,7 +162,7 @@ def summarize_gpu_csv(paths: list[Path]) -> dict[str, dict[str, float | int]]:
 
 
 def summarize_records(records: list[dict[str, Any]], source: Path) -> dict[str, Any]:
-    metadata = next(
+    metadata: dict[str, Any] = next(
         (
             record.get("metadata", {})
             for record in records
@@ -162,12 +171,24 @@ def summarize_records(records: list[dict[str, Any]], source: Path) -> dict[str, 
         {},
     )
     observations: dict[str, list[float]] = defaultdict(list)
+    observations_by_concurrency: dict[int, dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     errors: list[dict[str, Any]] = []
     turns = 0
+    tool_turns = 0
+    stale = 0
+    cancelled = 0
+    tool_errors = 0
+    default_concurrency = metadata.get("session_concurrency")
     for record in records:
         kind = record.get("record_type")
         if kind == "turn":
             turns += 1
+            if record.get("tool_call_emitted_at") is not None:
+                tool_turns += 1
+            stale += int(record.get("stale_count", 0))
+            cancelled += int(bool(record.get("cancelled", False)))
             metrics = record.get("metrics")
             if not isinstance(metrics, dict):
                 continue
@@ -178,19 +199,29 @@ def summarize_records(records: list[dict[str, Any]], source: Path) -> dict[str, 
                     and math.isfinite(value)
                 ):
                     observations[name].append(float(value))
+                    concurrency = record.get("session_concurrency", default_concurrency)
+                    if isinstance(concurrency, int) and concurrency in {1, 2}:
+                        observations_by_concurrency[concurrency][name].append(float(value))
         elif kind == "error":
             errors.append(record)
+            tool_errors += int(bool(record.get("tool_call_error", False)))
 
-    metric_summary: dict[str, dict[str, float | int]] = {}
-    for name, values in sorted(observations.items()):
-        metric_summary[name] = {
-            "count": len(values),
-            "p50": percentile(values, 0.50),
-            "p95": percentile(values, 0.95),
-            "p99": percentile(values, 0.99),
-            "min": min(values),
-            "max": max(values),
+    def metric_summary(
+        source_observations: dict[str, list[float]],
+    ) -> dict[str, dict[str, float | int]]:
+        return {
+            name: {
+                "count": len(values),
+                "p50": percentile(values, 0.50),
+                "p95": percentile(values, 0.95),
+                "p99": percentile(values, 0.99),
+                "min": min(values),
+                "max": max(values),
+            }
+            for name, values in sorted(source_observations.items())
         }
+
+    successful_or_failed_tool_turns = tool_turns + tool_errors
 
     return {
         "schema_version": 1,
@@ -198,9 +229,21 @@ def summarize_records(records: list[dict[str, Any]], source: Path) -> dict[str, 
         "source": str(source),
         "metadata": metadata,
         "turns": turns,
+        "tool_turns": tool_turns,
+        "tool_call_error_rate": (
+            tool_errors / successful_or_failed_tool_turns
+            if successful_or_failed_tool_turns
+            else None
+        ),
+        "stale": stale,
+        "cancelled": cancelled,
         "errors": len(errors),
         "ooms": sum("oom" in str(error).lower() for error in errors),
-        "metrics": metric_summary,
+        "metrics": metric_summary(observations),
+        "metrics_by_session_concurrency": {
+            str(concurrency): metric_summary(grouped)
+            for concurrency, grouped in sorted(observations_by_concurrency.items())
+        },
         "service_metrics": summarize_prometheus(records),
     }
 
@@ -249,6 +292,24 @@ def render_markdown(report: dict[str, Any]) -> str:
             )
         lines.append("")
         lines.append("All time values are seconds and come from the raw observations.")
+    grouped_metrics = report.get("metrics_by_session_concurrency", {})
+    if grouped_metrics:
+        lines.extend(["", "## Measurements by session concurrency", ""])
+        for concurrency, concurrency_metrics in grouped_metrics.items():
+            lines.extend(
+                [
+                    f"### {concurrency} active session(s)",
+                    "",
+                    "| Metric | n | p50 | p95 | p99 |",
+                    "|---|---:|---:|---:|---:|",
+                ]
+            )
+            for name, values in concurrency_metrics.items():
+                lines.append(
+                    f"| `{name}` | {values['count']} | {values['p50']:.4f} | "
+                    f"{values['p95']:.4f} | {values['p99']:.4f} |"
+                )
+            lines.append("")
     service_metrics = report.get("service_metrics", {})
     if service_metrics:
         lines.extend(["", "## Service metrics", ""])

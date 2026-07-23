@@ -8,10 +8,17 @@ from pathlib import Path
 import pytest
 from livekit import rtc
 from livekit.agents import APIConnectOptions
-from livekit.agents.llm import RealtimeError
+from livekit.agents.llm import (
+    FunctionCall,
+    FunctionCallOutput,
+    RealtimeError,
+    ToolContext,
+    function_tool,
+)
+from livekit.agents.llm.tool_context import ProviderTool
 from livekit.plugins.hugging_voice.audio import InputAudioProcessor
 from livekit.plugins.hugging_voice.options import resolve_base_urls, resolve_token
-from livekit.plugins.hugging_voice.realtime import RealtimeModel
+from livekit.plugins.hugging_voice.realtime import RealtimeModel, RealtimeSession
 
 
 def pcm16(values: list[int]) -> bytes:
@@ -97,6 +104,7 @@ def test_capabilities_are_truthful_and_fixed() -> None:
     assert model.capabilities.mutable_instructions
     assert not model.capabilities.message_truncation
     assert not model.capabilities.mutable_tools
+    assert model.capabilities.per_response_tool_choice
     assert not model.capabilities.manual_function_calls
 
 
@@ -120,9 +128,104 @@ async def test_unsupported_tools_video_and_truncation_are_rejected() -> None:
             )
         with pytest.raises(RealtimeError):
             session.truncate(message_id="item_x", modalities=["audio"], audio_end_ms=0)
-        with pytest.raises(RealtimeError):
-            session.update_options(tool_choice="auto")
+        session.update_options(tool_choice="auto")
         await session.update_tools([])
         await asyncio.sleep(0)
+    finally:
+        await model.aclose()
+
+
+def test_livekit_function_tool_is_serialized_strictly() -> None:
+    @function_tool
+    async def add_numbers(a: int, b: int) -> str:
+        """Add two integers."""
+
+        return str(a + b)
+
+    tools = RealtimeSession._protocol_tools(ToolContext([add_numbers]))
+    assert tools[0].function.name == "add_numbers"
+    assert tools[0].function.strict is True
+    assert tools[0].function.parameters["additionalProperties"] is False
+
+
+def test_tool_order_is_deterministic_and_provider_tools_are_rejected() -> None:
+    @function_tool
+    async def zebra(value: int) -> str:
+        """Return a value."""
+
+        return str(value)
+
+    @function_tool
+    async def alpha(value: int) -> str:
+        """Return a value."""
+
+        return str(value)
+
+    tools = RealtimeSession._protocol_tools(ToolContext([zebra, alpha]))
+    assert [tool.function.name for tool in tools] == ["alpha", "zebra"]
+    with pytest.raises(RealtimeError, match="provider tools"):
+        RealtimeSession._protocol_tools(ToolContext([ProviderTool(id="provider")]))
+
+
+@pytest.mark.asyncio
+async def test_tool_updates_are_idempotent_then_frozen_after_generation() -> None:
+    @function_tool
+    async def alpha(value: int) -> str:
+        """Return a value."""
+
+        return str(value)
+
+    model = RealtimeModel(
+        base_url="ws://127.0.0.1:1",
+        token="secret",
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.01),
+    )
+    session = model.session()
+    try:
+        await session.update_tools([alpha])
+        session._tools_frozen = True
+        await session.update_tools([alpha])
+        with pytest.raises(RealtimeError, match="immutable"):
+            await session.update_tools([])
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_barge_in_invalidates_dangling_call_for_result_and_replay() -> None:
+    model = RealtimeModel(
+        base_url="ws://127.0.0.1:1",
+        token="secret",
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.01),
+    )
+    session = model.session()
+    session._session_id = "session_test"
+    call = FunctionCall(
+        id="item_call",
+        call_id="call_add",
+        name="add_numbers",
+        arguments='{"a":19,"b":23}',
+        extra={
+            "hugging_voice": {
+                "turn_id": "turn_1",
+                "turn_revision": 1,
+                "generation_id": "gen_1",
+                "response_id": "resp_1",
+            }
+        },
+    )
+    session._chat_ctx.insert(call)
+    try:
+        session._invalidate_dangling_calls()
+        assert session._skip_invalidated_replay(call)
+        output = FunctionCallOutput(
+            call_id=call.call_id,
+            name=call.name,
+            output="42",
+            is_error=False,
+        )
+        session._chat_ctx.insert(output)
+        with pytest.raises(RealtimeError, match="invalidated"):
+            session._command_event(session._conversation_command(output))
     finally:
         await model.aclose()

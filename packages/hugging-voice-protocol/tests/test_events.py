@@ -9,9 +9,20 @@ import pytest
 from hugging_voice_protocol.audio import MAX_AUDIO_BYTES
 from hugging_voice_protocol.events import (
     CLIENT_EVENT_ADAPTER,
+    MAX_ALL_TOOL_SCHEMAS_BYTES,
     MAX_CONTEXT_ITEM_CHARS,
     MAX_INSTRUCTIONS_CHARS,
+    MAX_TOOL_ARGUMENTS_CHARS,
+    MAX_TOOL_OUTPUT_CHARS,
     SERVER_EVENT_ADAPTER,
+    FunctionCallConversationItem,
+    FunctionCallOutputConversationItem,
+    FunctionDefinition,
+    FunctionTool,
+    NamedToolChoice,
+    NamedToolChoiceFunction,
+    ResponseCreateEvent,
+    SessionConfig,
 )
 from pydantic import ValidationError
 
@@ -94,12 +105,12 @@ def test_session_update_rejects_unsafe_speech_identifiers(field: str, value: str
         CLIENT_EVENT_ADAPTER.validate_python(payload)
 
 
-def test_session_update_rejects_tools_models_unknown_fields_and_large_instructions() -> None:
-    for field in ("tools", "model", "speaker", "reference_audio"):
+def test_session_update_rejects_model_fields_and_large_instructions() -> None:
+    for field in ("model", "speaker", "reference_audio"):
         payload = load_client("client_session_update.json")
         session = payload["session"]
         assert isinstance(session, dict)
-        session[field] = [] if field == "tools" else "forbidden"
+        session[field] = "forbidden"
         with pytest.raises(ValidationError):
             CLIENT_EVENT_ADAPTER.validate_python(payload)
 
@@ -137,9 +148,77 @@ def test_context_and_audio_are_bounded_and_unknown_events_fail() -> None:
 
 def test_protocol_version_and_extra_fields_are_strict() -> None:
     payload = load_client("client_audio_commit.json")
-    payload["protocol_version"] = 2
+    payload["protocol_version"] = 1
     with pytest.raises(ValidationError):
         CLIENT_EVENT_ADAPTER.validate_python(payload)
+
+
+def test_tool_choice_schema_and_payload_bounds_are_strict() -> None:
+    tool = FunctionTool(
+        function=FunctionDefinition(
+            name="lookup_order",
+            description="Look up one order.",
+            parameters={"type": "object", "properties": {}},
+        )
+    )
+    assert SessionConfig(tools=(tool,), tool_choice="required").tools == (tool,)
+    named = NamedToolChoice(function=NamedToolChoiceFunction(name="lookup_order"))
+    assert (
+        ResponseCreateEvent(
+            event_id="evt_tool_choice",
+            session_id="session_alpha",
+            tools=(tool,),
+            tool_choice=named,
+        ).tool_choice
+        == named
+    )
+    with pytest.raises(ValidationError):
+        SessionConfig(tools=(), tool_choice="required")
+    with pytest.raises(ValidationError):
+        SessionConfig(
+            tools=(tool,),
+            tool_choice=NamedToolChoice(function=NamedToolChoiceFunction(name="unknown_tool")),
+        )
+    with pytest.raises(ValidationError):
+        FunctionDefinition(
+            name="bad tool",
+            parameters={"type": "object"},
+        )
+    with pytest.raises(ValidationError):
+        FunctionCallConversationItem(
+            id="item_call",
+            call_id="call_1",
+            name="lookup_order",
+            arguments="x" * (MAX_TOOL_ARGUMENTS_CHARS + 1),
+            turn_id="turn_1",
+            turn_revision=0,
+            generation_id="gen_1",
+            response_id="resp_1",
+        )
+    with pytest.raises(ValidationError):
+        FunctionCallOutputConversationItem(
+            id="item_output",
+            call_id="call_1",
+            name="lookup_order",
+            output="x" * (MAX_TOOL_OUTPUT_CHARS + 1),
+            is_error=False,
+            turn_id="turn_1",
+            turn_revision=0,
+            generation_id="gen_1",
+            response_id="resp_1",
+        )
+    large_tools = tuple(
+        FunctionTool(
+            function=FunctionDefinition(
+                name=f"large_{index}",
+                parameters={"type": "object", "description": "x" * 13_000},
+            )
+        )
+        for index in range(6)
+    )
+    with pytest.raises(ValidationError):
+        SessionConfig(tools=large_tools)
+    assert MAX_ALL_TOOL_SCHEMAS_BYTES == 64 * 1024
 
     payload = load_client("client_audio_commit.json")
     payload["unexpected"] = True
@@ -147,6 +226,6 @@ def test_protocol_version_and_extra_fields_are_strict() -> None:
         CLIENT_EVENT_ADAPTER.validate_python(payload)
 
     payload = load_client("client_response_create.json")
-    payload["tools"] = []
+    payload["model"] = "forbidden"
     with pytest.raises(ValidationError):
         CLIENT_EVENT_ADAPTER.validate_python(payload)

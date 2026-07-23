@@ -10,7 +10,14 @@ import numpy as np
 import pytest
 from aiohttp import web
 from hugging_voice_protocol.audio import OUTPUT_FRAME_BYTES
-from hugging_voice_service.runtimes.gemma import GemmaMessage, GemmaRuntime, TextDelta, TextUsage
+from hugging_voice_protocol.events import FunctionDefinition, FunctionTool
+from hugging_voice_service.runtimes.gemma import (
+    GemmaMessage,
+    GemmaRuntime,
+    TextDelta,
+    TextUsage,
+    ToolCall,
+)
 from hugging_voice_service.runtimes.parakeet import ParakeetRuntime
 from hugging_voice_service.runtimes.qwen_tts import QwenTTSRuntime
 from hugging_voice_service.runtimes.silero import SessionVAD
@@ -294,5 +301,62 @@ async def test_gemma_allows_exactly_two_parallel_isolated_streams() -> None:
         assert maximum == 2
     finally:
         release.set()
+        await runtime.aclose()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_gemma_aggregates_one_structured_tool_call_with_slot_cache() -> None:
+    requests: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        requests.append(await request.json())
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        fragments = [
+            {"index": 0, "id": "call_add", "function": {"name": "add_", "arguments": '{"a":'}},
+            {"index": 0, "function": {"name": "numbers", "arguments": '19,"b":23}'}},
+        ]
+        for fragment in fragments:
+            event = {"choices": [{"delta": {"tool_calls": [fragment]}}]}
+            await response.write(f"data: {json.dumps(event)}\n\n".encode())
+        await response.write(b"data: [DONE]\n\n")
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    sockets = site._server.sockets  # type: ignore[union-attr]
+    runtime = GemmaRuntime(port=sockets[0].getsockname()[1])
+    tool = FunctionTool(
+        function=FunctionDefinition(
+            name="add_numbers",
+            description="Add two integers.",
+            parameters={"type": "object", "properties": {}},
+        )
+    )
+    try:
+        events = [
+            event
+            async for event in runtime.stream_response(
+                messages=[GemmaMessage(role="user", content="Addiere 19 und 23")],
+                tools=[tool],
+                tool_choice="required",
+                slot_id=1,
+            )
+        ]
+        calls = [event for event in events if isinstance(event, ToolCall)]
+        assert calls == [
+            ToolCall(call_id="call_add", name="add_numbers", arguments='{"a":19,"b":23}')
+        ]
+        assert requests[0]["id_slot"] == 1
+        assert requests[0]["cache_prompt"] is True
+        assert requests[0]["parallel_tool_calls"] is False
+        assert requests[0]["temperature"] == 0.2
+        assert requests[0]["max_tokens"] == 128
+    finally:
         await runtime.aclose()
         await runner.cleanup()

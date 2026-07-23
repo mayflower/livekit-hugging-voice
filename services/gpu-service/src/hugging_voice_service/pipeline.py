@@ -15,9 +15,12 @@ from hugging_voice_protocol.audio import decode_pcm16_base64
 from hugging_voice_protocol.errors import ErrorCode
 from hugging_voice_protocol.events import (
     ClientEvent,
+    ConversationItemCreatedEvent,
     ConversationItemCreateEvent,
     ErrorEvent,
     ErrorPayload,
+    FunctionCallConversationItem,
+    FunctionTool,
     InputAudioBufferAppendEvent,
     InputAudioBufferClearEvent,
     InputAudioBufferCommitEvent,
@@ -29,20 +32,33 @@ from hugging_voice_protocol.events import (
     ResponseDoneEvent,
     ResponseOutputAudioDeltaEvent,
     ResponseOutputAudioDoneEvent,
+    ResponseOutputFunctionCallDoneEvent,
     ResponseOutputTextDeltaEvent,
     ResponseOutputTextDoneEvent,
     ResponseReason,
     ResponseStatus,
+    SessionUpdatedEvent,
     SessionUpdateEvent,
     SpeechStartedEvent,
     SpeechStoppedEvent,
+    ToolChoice,
     Usage,
 )
 
 from .cancellation import GenerationToken
 from .config import SpeechSettings
-from .conversation import ConversationRole
-from .runtimes.gemma import GemmaMessage, TextDelta, TextUsage
+from .conversation import (
+    ConversationRole,
+    FunctionCallEntry,
+    FunctionCallOutputEntry,
+)
+from .runtimes.gemma import (
+    GemmaMessage,
+    TextDelta,
+    TextUsage,
+    ToolCall,
+    ToolCallValidationError,
+)
 from .schedulers.stt import STTJob
 from .schedulers.tts import TTSJob
 from .sessions import SessionState
@@ -50,6 +66,14 @@ from .telemetry import ServiceTelemetry
 from .text_segmenter import SpeechTextSegmenter
 
 logger = logging.getLogger(__name__)
+
+
+class PipelineEventError(ValueError):
+    """A recoverable, structured rejection of one client event."""
+
+    def __init__(self, code: ErrorCode, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class GemmaStreamer(Protocol):
@@ -60,8 +84,10 @@ class GemmaStreamer(Protocol):
         instructions: str = "",
         language_instruction: str = "",
         system_prompt: str = "",
-        max_tokens: int = 256,
-    ) -> AsyncIterator[TextDelta | TextUsage]: ...
+        tools: Sequence[Any] = (),
+        tool_choice: Any = "auto",
+        slot_id: int,
+    ) -> AsyncIterator[TextDelta | ToolCall | TextUsage]: ...
 
 
 class STTScheduling(Protocol):
@@ -99,6 +125,8 @@ class ResponseContext:
     language_instruction: str
     voice_instructions: str
     system_prompt: str
+    tools: tuple[FunctionTool, ...]
+    tool_choice: ToolChoice
     started_at: float
     speech_stopped_at: float | None
     text: str = ""
@@ -152,6 +180,8 @@ class VoicePipeline:
         if event.session_id != self.state.session_id:
             raise ValueError("event session_id does not match the claimed session")
         self.state.last_activity_at = time.monotonic()
+        if not isinstance(event, SessionUpdateEvent | ConversationItemCreateEvent):
+            self.state.context_replay_open = False
         if isinstance(event, SessionUpdateEvent):
             await self._update_session(event)
         elif isinstance(event, InputAudioBufferAppendEvent):
@@ -161,9 +191,13 @@ class VoicePipeline:
         elif isinstance(event, InputAudioBufferClearEvent):
             await self._clear_audio()
         elif isinstance(event, ConversationItemCreateEvent):
-            self._create_conversation_item(event)
+            await self._create_conversation_item(event)
         elif isinstance(event, ResponseCreateEvent):
-            await self._start_response(response_instructions=event.instructions or "")
+            await self._start_response(
+                response_instructions=event.instructions or "",
+                tools=event.tools,
+                tool_choice=event.tool_choice,
+            )
         elif isinstance(event, ResponseCancelEvent):
             await self._cancel_response(
                 reason=ResponseReason.CLIENT_CANCELLED,
@@ -190,12 +224,24 @@ class VoicePipeline:
         self.state.vad.reset()
         self.state.cancellation.reset()
 
-    async def send_error(self, code: ErrorCode, message: str, *, retryable: bool = False) -> None:
+    async def send_error(
+        self,
+        code: ErrorCode,
+        message: str,
+        *,
+        retryable: bool = False,
+        source_event_id: str | None = None,
+    ) -> None:
         await self.state.transport.send(
             ErrorEvent(
                 event_id=_id("evt"),
                 session_id=self.state.session_id,
-                error=ErrorPayload(code=code, message=message, retryable=retryable),
+                error=ErrorPayload(
+                    code=code,
+                    message=message,
+                    retryable=retryable,
+                    event_id=source_event_id,
+                ),
             )
         )
 
@@ -208,6 +254,16 @@ class VoicePipeline:
         self._speech.resolve_language(language)
         self._speech.resolve_voice(voice)
         self.state.instructions = config.instructions
+        if self.state.tools_frozen and config.tools != self.state.tools:
+            raise PipelineEventError(
+                ErrorCode.INVALID_TOOL_CONFIGURATION,
+                "tools are immutable after the initial session update",
+            )
+        self.state.tools = config.tools
+        self.state.tool_choice = config.tool_choice
+        self._telemetry.tool_schema_bytes.set(
+            sum(len(tool.model_dump_json().encode("utf-8")) for tool in config.tools)
+        )
         self.state.language = language
         self.state.voice = voice
         self.state.voice_instructions = config.voice_instructions
@@ -222,6 +278,13 @@ class VoicePipeline:
             speech_pad_ms=config.turn_detection.speech_pad_ms,
         )
         self.state.input_audio_buffer.clear()
+        await self.state.transport.send(
+            SessionUpdatedEvent(
+                event_id=_id("evt"),
+                session_id=self.state.session_id,
+                source_event_id=event.event_id,
+            )
+        )
 
     async def _append_audio(self, event: InputAudioBufferAppendEvent) -> None:
         if event.sequence != self.state.next_audio_sequence:
@@ -254,6 +317,10 @@ class VoicePipeline:
         self.state.current_turn_id = _id("turn")
         self.state.speech_start_sample = sample_index
         self.state.partial_epoch += 1
+        if self.state.pending_call is not None:
+            self.state.pending_call = None
+            self.state.pending_call_emitted_at = None
+            self._telemetry.tool_call_rejections.inc()
         if self.state.interrupt_response and self._response is not None:
             started = time.monotonic()
             await self._cancel_response(reason=ResponseReason.BARGE_IN)
@@ -439,19 +506,135 @@ class VoicePipeline:
         self.state.current_turn_id = None
         self.state.speech_start_sample = None
 
-    def _create_conversation_item(self, event: ConversationItemCreateEvent) -> None:
+    async def _create_conversation_item(self, event: ConversationItemCreateEvent) -> None:
         if self._response is not None:
-            raise ValueError("cannot replay conversation while a response is active")
-        role: ConversationRole = "user" if event.item.role.value == "user" else "assistant"
-        self.state.conversation.append(
-            item_id=event.item.id,
-            role=role,
-            content=event.item.content,
+            raise PipelineEventError(
+                ErrorCode.TOOL_CALL_STATE_CONFLICT,
+                "cannot update conversation while a response is active",
+            )
+        item = event.item
+        if item.type == "message":
+            role: ConversationRole = "user" if item.role.value == "user" else "assistant"
+            self.state.conversation.append(item_id=item.id, role=role, content=item.content)
+        elif item.type == "function_call":
+            pending = self.state.pending_call
+            if pending is None:
+                if not self.state.context_replay_open or self.state.tools_frozen:
+                    raise PipelineEventError(
+                        ErrorCode.TOOL_CALL_STATE_CONFLICT,
+                        "a function call may only be restored during context replay",
+                    )
+                if item.name not in {tool.function.name for tool in self.state.tools}:
+                    raise PipelineEventError(
+                        ErrorCode.UNKNOWN_TOOL_NAME,
+                        "replayed function call references an unknown tool",
+                    )
+                self.state.pending_call = item
+            elif item != pending:
+                raise PipelineEventError(
+                    ErrorCode.TOOL_CALL_STATE_CONFLICT,
+                    "only the current server-issued function call may be replayed",
+                )
+        else:
+            pending = self.state.pending_call
+            if pending is None:
+                code = (
+                    ErrorCode.DUPLICATE_TOOL_CALL_OUTPUT
+                    if self.state.conversation.has_call(item.call_id)
+                    else ErrorCode.UNKNOWN_TOOL_CALL_OUTPUT
+                )
+                raise PipelineEventError(code, "tool output has no matching pending function call")
+            if item.call_id != pending.call_id:
+                raise PipelineEventError(
+                    ErrorCode.UNKNOWN_TOOL_CALL_OUTPUT,
+                    "tool output does not match the pending function call",
+                )
+            if item.name != pending.name:
+                raise PipelineEventError(
+                    ErrorCode.TOOL_CALL_STATE_CONFLICT,
+                    "tool output name does not match the pending function call",
+                )
+            if (
+                item.turn_id,
+                item.turn_revision,
+                item.generation_id,
+                item.response_id,
+            ) != (
+                pending.turn_id,
+                pending.turn_revision,
+                pending.generation_id,
+                pending.response_id,
+            ):
+                raise PipelineEventError(
+                    ErrorCode.STALE_TOOL_CALL_OUTPUT,
+                    "tool output correlations are stale",
+                )
+            self.state.conversation.commit_tool_exchange(
+                call=FunctionCallEntry(
+                    item_id=pending.id,
+                    call_id=pending.call_id,
+                    name=pending.name,
+                    arguments=pending.arguments,
+                    turn_id=pending.turn_id,
+                    turn_revision=pending.turn_revision,
+                    generation_id=pending.generation_id,
+                    response_id=pending.response_id,
+                ),
+                output=FunctionCallOutputEntry(
+                    item_id=item.id,
+                    call_id=item.call_id,
+                    name=item.name,
+                    output=item.output,
+                    is_error=item.is_error,
+                    turn_id=item.turn_id,
+                    turn_revision=item.turn_revision,
+                    generation_id=item.generation_id,
+                    response_id=item.response_id,
+                ),
+            )
+            self.state.pending_call = None
+            self.state.tool_result_ack_at = time.monotonic()
+            if self.state.pending_call_emitted_at is not None:
+                self._telemetry.tool_result_wait_seconds.observe(
+                    self.state.tool_result_ack_at - self.state.pending_call_emitted_at
+                )
+            logger.info(
+                "tool_result_acknowledged",
+                extra={
+                    "session_id": self.state.session_id,
+                    "turn_id": item.turn_id,
+                    "generation_id": item.generation_id,
+                    "response_id": item.response_id,
+                    "call_id": item.call_id,
+                    "tool_name": item.name,
+                    "result_size": len(item.output),
+                    "is_error": item.is_error,
+                },
+            )
+        await self.state.transport.send(
+            ConversationItemCreatedEvent(
+                event_id=_id("evt"),
+                session_id=self.state.session_id,
+                source_event_id=event.event_id,
+                item_id=item.id,
+            )
         )
 
-    async def _start_response(self, *, response_instructions: str) -> None:
+    async def _start_response(
+        self,
+        *,
+        response_instructions: str,
+        tools: Sequence[Any] | None = None,
+        tool_choice: Any | None = None,
+    ) -> None:
         if self._response is not None:
             raise ValueError("a response is already active for this session")
+        if self.state.pending_call is not None:
+            raise PipelineEventError(
+                ErrorCode.TOOL_CALL_STATE_CONFLICT,
+                "pending tool call requires a confirmed output before another response",
+            )
+        self.state.tools_frozen = True
         if self.state.current_turn_id is None:
             self.state.current_turn_revision += 1
             self.state.current_turn_id = _id("turn")
@@ -484,6 +667,8 @@ class VoicePipeline:
                 self.state.voice_instructions,
             ),
             system_prompt=self._speech.system_prompt,
+            tools=tuple(self.state.tools if tools is None else tools),
+            tool_choice=self.state.tool_choice if tool_choice is None else tool_choice,
             started_at=time.monotonic(),
             speech_stopped_at=self._speech_stopped_at,
         )
@@ -500,9 +685,10 @@ class VoicePipeline:
 
     async def _run_response(self, context: ResponseContext) -> None:
         segments: asyncio.Queue[str | None] = asyncio.Queue(maxsize=8)
-        tts_task = asyncio.create_task(self._run_tts(context, segments))
+        tts_task: asyncio.Task[None] | None = None
         segmenter = SpeechTextSegmenter()
         first_text_at: float | None = None
+        function_call: ToolCall | None = None
         self._telemetry.llm_jobs_active.inc()
         try:
             async for event in self._gemma.stream_response(
@@ -510,6 +696,9 @@ class VoicePipeline:
                 instructions=context.instructions,
                 language_instruction=context.language_instruction,
                 system_prompt=context.system_prompt,
+                tools=context.tools,
+                tool_choice=context.tool_choice,
+                slot_id=self.state.slot.index,
             ):
                 if not self.state.cancellation.is_current(context.token):
                     self._telemetry.stale_chunks_dropped.inc()
@@ -517,9 +706,23 @@ class VoicePipeline:
                 if isinstance(event, TextUsage):
                     context.usage = event
                     continue
+                if isinstance(event, ToolCall):
+                    if context.text or function_call is not None:
+                        raise ValueError("Gemma emitted mixed or multiple tool output")
+                    function_call = event
+                    self._telemetry.tool_decision_seconds.observe(
+                        time.monotonic() - context.started_at
+                    )
+                    continue
+                if tts_task is None:
+                    tts_task = asyncio.create_task(self._run_tts(context, segments))
                 if first_text_at is None:
                     first_text_at = time.monotonic()
                     self._telemetry.llm_ttft_seconds.observe(first_text_at - context.started_at)
+                    if self.state.tool_result_ack_at is not None:
+                        self._telemetry.tool_result_to_first_text_seconds.observe(
+                            first_text_at - self.state.tool_result_ack_at
+                        )
                 context.text += event.text
                 await self.state.transport.send(
                     ResponseOutputTextDeltaEvent(
@@ -529,8 +732,53 @@ class VoicePipeline:
                 )
                 for segment in segmenter.feed(event.text):
                     await segments.put(segment)
+            if function_call is not None:
+                pending = FunctionCallConversationItem(
+                    id=context.item_id,
+                    call_id=function_call.call_id,
+                    name=function_call.name,
+                    arguments=function_call.arguments,
+                    turn_id=context.turn_id,
+                    turn_revision=context.turn_revision,
+                    generation_id=context.generation_id,
+                    response_id=context.response_id,
+                )
+                self.state.pending_call = pending
+                self.state.pending_call_emitted_at = time.monotonic()
+                self._telemetry.tool_call_generations.inc()
+                logger.info(
+                    "tool_call_emitted",
+                    extra={
+                        "session_id": self.state.session_id,
+                        "turn_id": context.turn_id,
+                        "generation_id": context.generation_id,
+                        "response_id": context.response_id,
+                        "call_id": pending.call_id,
+                        "tool_name": pending.name,
+                        "argument_size": len(pending.arguments),
+                        "duration_seconds": round(
+                            self.state.pending_call_emitted_at - context.started_at, 3
+                        ),
+                    },
+                )
+                await self.state.transport.send(
+                    ResponseOutputFunctionCallDoneEvent(
+                        **self._response_fields(context),
+                        call_id=pending.call_id,
+                        name=pending.name,
+                        arguments=pending.arguments,
+                    )
+                )
+                await self._finalize_response(
+                    context,
+                    status=ResponseStatus.COMPLETED,
+                    reason=ResponseReason.TOOL_CALL,
+                )
+                return
             for segment in segmenter.flush():
                 await segments.put(segment)
+            if tts_task is None:
+                raise ValueError("Gemma returned neither text nor a tool call")
             await segments.put(None)
             await self._send_text_done(context)
             await tts_task
@@ -547,18 +795,21 @@ class VoicePipeline:
                     content=context.text,
                 )
         except asyncio.CancelledError:
-            tts_task.cancel()
-            await asyncio.gather(tts_task, return_exceptions=True)
-            await self._send_text_done(context)
-            await self._send_audio_done(context)
+            if tts_task is not None:
+                tts_task.cancel()
+                await asyncio.gather(tts_task, return_exceptions=True)
+            if function_call is None:
+                await self._send_text_done(context)
+                await self._send_audio_done(context)
             await self._finalize_response(
                 context,
                 status=ResponseStatus.CANCELLED,
                 reason=context.cancel_reason,
             )
         except Exception as exc:
-            tts_task.cancel()
-            await asyncio.gather(tts_task, return_exceptions=True)
+            if tts_task is not None:
+                tts_task.cancel()
+                await asyncio.gather(tts_task, return_exceptions=True)
             logger.exception(
                 "response_generation_failed",
                 extra={
@@ -569,12 +820,15 @@ class VoicePipeline:
                     "duration_seconds": round(time.monotonic() - context.started_at, 3),
                 },
             )
+            if isinstance(exc, ToolCallValidationError):
+                self._telemetry.tool_call_parse_failures.inc()
             await self.send_error(
-                ErrorCode.MODEL_FAILURE,
+                (exc.code if isinstance(exc, ToolCallValidationError) else ErrorCode.MODEL_FAILURE),
                 str(exc) or type(exc).__name__,
             )
-            await self._send_text_done(context)
-            await self._send_audio_done(context)
+            if function_call is None:
+                await self._send_text_done(context)
+                await self._send_audio_done(context)
             await self._finalize_response(
                 context,
                 status=ResponseStatus.FAILED,
@@ -602,6 +856,10 @@ class VoicePipeline:
             if context.audio_sequence == 0 and context.speech_stopped_at is not None:
                 self._telemetry.first_audio_latency_seconds.observe(
                     time.monotonic() - context.speech_stopped_at
+                )
+            if context.audio_sequence == 0 and self.state.tool_result_ack_at is not None:
+                self._telemetry.tool_result_to_first_audio_seconds.observe(
+                    time.monotonic() - self.state.tool_result_ack_at
                 )
             await self.state.transport.send(
                 ResponseOutputAudioDeltaEvent(
@@ -716,6 +974,9 @@ class VoicePipeline:
             )
         )
         self.state.cancellation.finish(context.token)
+        if reason is not ResponseReason.TOOL_CALL and self.state.tool_result_ack_at is not None:
+            self.state.tool_result_ack_at = None
+            self.state.pending_call_emitted_at = None
         if usage.completion_tokens > 0:
             duration = max(time.monotonic() - context.started_at, 1e-9)
             self._telemetry.llm_tokens_per_second.observe(usage.completion_tokens / duration)

@@ -12,7 +12,12 @@ from hugging_voice_protocol.events import ResponseCreatedEvent, ResponseOutputAu
 from hugging_voice_service.auth import AuthenticationError, TokenAuthenticator
 from hugging_voice_service.cancellation import GenerationCancellation
 from hugging_voice_service.capacity import CapacityManager, SlotState
-from hugging_voice_service.conversation import Conversation
+from hugging_voice_service.conversation import (
+    Conversation,
+    FunctionCallEntry,
+    FunctionCallOutputEntry,
+    ToolExchangeGroup,
+)
 from hugging_voice_service.realtime import WebSocketTransport
 from hugging_voice_service.runtimes.silero import SessionVAD
 from hugging_voice_service.sessions import BoundedAudioBuffer, SessionRegistry, SessionTransport
@@ -84,6 +89,7 @@ def test_audio_buffer_tracks_absolute_samples_and_rejects_overflow() -> None:
 
 def test_german_text_segmenter_preserves_abbreviations_and_bounds_segments() -> None:
     segmenter = SpeechTextSegmenter(max_characters=80)
+    assert segmenter.feed("Ein vollständiger Satz.") == ["Ein vollständiger Satz."]
     assert segmenter.feed("Dr. Müller misst 3.14 Meter. Danach geht es weiter. ") == [
         "Dr. Müller misst 3.14 Meter.",
         "Danach geht es weiter.",
@@ -92,6 +98,52 @@ def test_german_text_segmenter_preserves_abbreviations_and_bounds_segments() -> 
     segments = segmenter.feed(long) + segmenter.flush()
     assert " ".join(segments) == long.strip()
     assert all(len(segment) <= 80 for segment in segments)
+
+
+def test_tool_exchange_is_committed_and_trimmed_atomically() -> None:
+    conversation = Conversation(max_messages=2, max_characters=100)
+    call = FunctionCallEntry(
+        item_id="item_call",
+        call_id="call_1",
+        name="add_numbers",
+        arguments='{"a":19,"b":23}',
+        turn_id="turn_1",
+        turn_revision=0,
+        generation_id="gen_1",
+        response_id="resp_1",
+    )
+    output = FunctionCallOutputEntry(
+        item_id="item_output",
+        call_id="call_1",
+        name="add_numbers",
+        output="42",
+        is_error=False,
+        turn_id="turn_1",
+        turn_revision=0,
+        generation_id="gen_1",
+        response_id="resp_1",
+    )
+    conversation.commit_tool_exchange(call=call, output=output)
+    assert isinstance(conversation.groups[0], ToolExchangeGroup)
+    messages = conversation.messages()
+    assert messages[0].tool_calls[0].call_id == messages[1].tool_call_id == "call_1"
+    conversation.append(item_id="item_next", role="user", content="Weiter")
+    assert len(conversation.groups) == 1
+    assert conversation.entries[0].item_id == "item_next"
+
+    conflicting = FunctionCallOutputEntry(
+        item_id="item_bad",
+        call_id="call_wrong",
+        name="add_numbers",
+        output="42",
+        is_error=False,
+        turn_id="turn_1",
+        turn_revision=0,
+        generation_id="gen_1",
+        response_id="resp_1",
+    )
+    with pytest.raises(ValueError, match="do not match"):
+        Conversation().commit_tool_exchange(call=call, output=conflicting)
 
 
 @pytest.mark.asyncio
@@ -205,7 +257,7 @@ class BlockingWebSocket:
         self.sent: list[str] = []
 
     async def accept(self, subprotocol: str | None = None) -> None:
-        assert subprotocol == "hugging-voice-livekit.v1"
+        assert subprotocol == "hugging-voice-livekit.v2"
 
     async def send_text(self, data: str) -> None:
         if not self.sent:

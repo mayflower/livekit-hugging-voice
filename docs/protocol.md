@@ -1,14 +1,14 @@
-# Internal realtime protocol v1
+# Internal realtime protocol v2
 
 ## Transport and authentication
 
 The LiveKit plugin connects to `WS /v1/realtime` with subprotocol
-`hugging-voice-livekit.v1` and `Authorization: Bearer <token>`. The token is never
+`hugging-voice-livekit.v2` and `Authorization: Bearer <token>`. The token is never
 accepted in a query string. JSON control events and base64 PCM16 payloads share the
 WebSocket; this is not a public OpenAI endpoint and does not attempt complete
 OpenAI compatibility.
 
-Every event has `type`, an `evt_`-prefixed `event_id`, `protocol_version: 1`, and a
+Every event has `type`, an `evt_`-prefixed `event_id`, `protocol_version: 2`, and a
 `session_`-prefixed `session_id`. Turn events additionally correlate `turn_id` and
 `turn_revision`; response events add `generation_id`, `response_id`, and `item_id`.
 Unknown event types and fields are rejected.
@@ -31,21 +31,23 @@ stereo, unsupported-rate, and oversized audio is invalid.
   speaking-style instructions, fixed audio, bounded server-VAD values, interruption
   and transcription switches. The service validates language and voice against its
   configured maps; null or omitted language/voice values inherit its advertised
-  defaults. Model, raw speaker, tool, reference-audio, path, and cloud fields
-  are impossible under the strict schema.
+  defaults, plus bounded strict function schemas and the session tool choice.
+  Model, raw speaker, reference-audio, path, and cloud fields are impossible.
 - `input_audio_buffer.append`: ordered PCM16 chunk with a non-negative sequence.
 - `input_audio_buffer.commit` and `input_audio_buffer.clear`: explicit server-known
   buffer operations.
-- `conversation.item.create`: one completed `user` or `assistant` text item for
-  initial/reconnect replay; content is capped at 16,000 characters.
-- `response.create`: request a response with at most 8,000 characters of additional
-  instructions.
+- `conversation.item.create`: a typed message, function call, or function output;
+  the service ACKs it with `conversation.item.created`.
+- `response.create`: request a response with optional tools and `auto`, `required`,
+  `none`, or named tool choice.
 - `response.cancel`: identify the exact response and generation to cancel.
 
 ## Server events
 
 - `session.created` reports fixed model IDs, exact local revisions, configured
   default language/voice, supported language/voice IDs, and sample rates.
+- `session.updated` acknowledges the exact `session.update` source event.
+- `conversation.item.created` acknowledges durable in-session context acceptance.
 - `error` contains a bounded structured code/message, retryability, and optional
   source event ID.
 - `input_audio_buffer.speech_started` / `.speech_stopped` define server-VAD turns.
@@ -54,17 +56,21 @@ stereo, unsupported-rate, and oversized audio is invalid.
 - `response.created` establishes the response/generation/item correlation.
 - `response.output_text.delta` / `.done` stream visible assistant text.
 - `response.output_audio.delta` / `.done` stream ordered PCM16 and close audio.
+- `response.output_function_call.done` carries one canonical structured call. It
+  is released to LiveKit only with the matching `response.done(reason=tool_call)`.
 - `response.done` terminates exactly one response with status, reason, and real
   text-token usage. Unknown audio token usage is not represented or invented.
 
-Canonical examples for every v1 event live under `tests/fixtures/protocol` and are
+Canonical examples for protocol events live under `tests/fixtures/protocol` and are
 round-tripped by the protocol package tests.
 
 ## Bounds and close codes
 
 Instructions are capped at 8,000 characters, voice-style instructions at 2,000, a
 replay item at 16,000, a text delta at 4,096, an error message at 2,048, and IDs at
-96–100 characters with fixed prefixes. Pydantic models use `extra="forbid"`.
+96–100 characters with fixed prefixes. There are at most 32 tools, 16 KiB per
+schema, 64 KiB total schemas, and 16,000 characters each for arguments and output.
+Pydantic models use `extra="forbid"`.
 
 | Code | Meaning |
 |---:|---|

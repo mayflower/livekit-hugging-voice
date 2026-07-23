@@ -6,20 +6,26 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import pytest
+from hugging_voice_protocol.errors import ErrorCode
 from hugging_voice_protocol.events import (
+    ConversationItemCreateEvent,
+    FunctionCallConversationItem,
     InputAudioBufferAppendEvent,
     ResponseCancelEvent,
     ResponseCreateEvent,
     ResponseDoneEvent,
     ResponseOutputAudioDeltaEvent,
+    ResponseOutputAudioDoneEvent,
+    ResponseOutputFunctionCallDoneEvent,
     ResponseOutputTextDeltaEvent,
+    ResponseOutputTextDoneEvent,
     ServerEvent,
 )
 from hugging_voice_service.cancellation import GenerationToken
 from hugging_voice_service.capacity import SessionSlot
 from hugging_voice_service.config import SpeechSettings
-from hugging_voice_service.pipeline import VoicePipeline
-from hugging_voice_service.runtimes.gemma import GemmaMessage, TextDelta, TextUsage
+from hugging_voice_service.pipeline import PipelineEventError, VoicePipeline
+from hugging_voice_service.runtimes.gemma import GemmaMessage, TextDelta, TextUsage, ToolCall
 from hugging_voice_service.runtimes.silero import SessionVAD
 from hugging_voice_service.schedulers.stt import STTJob
 from hugging_voice_service.schedulers.tts import TTSJob
@@ -117,9 +123,11 @@ class TwoRoundGemma:
         instructions: str = "",
         language_instruction: str = "",
         system_prompt: str = "",
-        max_tokens: int = 256,
+        tools: object = (),
+        tool_choice: object = "auto",
+        slot_id: int = 0,
     ) -> AsyncIterator[TextDelta | TextUsage]:
-        del messages, instructions, language_instruction, system_prompt, max_tokens
+        del messages, instructions, language_instruction, system_prompt, tools, tool_choice, slot_id
         self.calls += 1
         if self.calls == 1:
             self.first_started.set()
@@ -136,11 +144,31 @@ class ImmediateGemma:
         instructions: str = "",
         language_instruction: str = "",
         system_prompt: str = "",
-        max_tokens: int = 256,
+        tools: object = (),
+        tool_choice: object = "auto",
+        slot_id: int = 0,
     ) -> AsyncIterator[TextDelta | TextUsage]:
-        del messages, instructions, language_instruction, system_prompt, max_tokens
+        del messages, instructions, language_instruction, system_prompt, tools, tool_choice, slot_id
         yield TextDelta("Hallo. ")
         yield TextUsage(prompt_tokens=2, completion_tokens=1, total_tokens=3)
+
+
+class ToolGemma:
+    async def stream_response(
+        self,
+        *,
+        messages: Sequence[GemmaMessage],
+        instructions: str = "",
+        language_instruction: str = "",
+        system_prompt: str = "",
+        tools: object = (),
+        tool_choice: object = "auto",
+        slot_id: int = 0,
+    ) -> AsyncIterator[ToolCall | TextUsage]:
+        del messages, instructions, language_instruction, system_prompt, tools, tool_choice
+        assert slot_id == 0
+        yield ToolCall(call_id="call_add", name="add_numbers", arguments='{"a":19,"b":23}')
+        yield TextUsage(prompt_tokens=4, completion_tokens=8, total_tokens=12)
 
 
 def make_state(*, probability: float = 0.0) -> tuple[SessionState, RecordingTransport]:
@@ -274,3 +302,71 @@ async def test_vad_barge_in_preserves_the_barge_in_terminal_reason() -> None:
     done = [event for event in transport.events if isinstance(event, ResponseDoneEvent)]
     assert len(done) == 1
     assert done[0].reason.value == "barge_in"
+
+
+@pytest.mark.asyncio
+async def test_tool_generation_is_silent_and_never_starts_tts() -> None:
+    state, transport = make_state()
+    tts = BlockingTTS()
+    pipeline = VoicePipeline(
+        state,
+        stt=UnusedSTT(),
+        tts=tts,
+        gemma=ToolGemma(),
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+    await pipeline.handle_event(
+        ResponseCreateEvent(event_id="evt_tool", session_id=state.session_id)
+    )
+    await wait_for_response_end(pipeline)
+    calls = [
+        event
+        for event in transport.events
+        if isinstance(event, ResponseOutputFunctionCallDoneEvent)
+    ]
+    assert len(calls) == 1 and calls[0].arguments == '{"a":19,"b":23}'
+    assert not tts.started.is_set()
+    assert not any(
+        isinstance(
+            event,
+            ResponseOutputTextDeltaEvent
+            | ResponseOutputTextDoneEvent
+            | ResponseOutputAudioDeltaEvent
+            | ResponseOutputAudioDoneEvent,
+        )
+        for event in transport.events
+    )
+    done = [event for event in transport.events if isinstance(event, ResponseDoneEvent)]
+    assert len(done) == 1 and done[0].reason.value == "tool_call"
+
+
+@pytest.mark.asyncio
+async def test_function_call_replay_is_rejected_after_bootstrap() -> None:
+    state, _ = make_state()
+    state.context_replay_open = False
+    pipeline = VoicePipeline(
+        state,
+        stt=UnusedSTT(),
+        tts=ImmediateTTS(),
+        gemma=ImmediateGemma(),
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+    event = ConversationItemCreateEvent(
+        event_id="evt_injected_call",
+        session_id=state.session_id,
+        item=FunctionCallConversationItem(
+            id="item_injected_call",
+            call_id="call_injected",
+            name="add_numbers",
+            arguments='{"a":19,"b":23}',
+            turn_id="turn_injected",
+            turn_revision=0,
+            generation_id="gen_injected",
+            response_id="resp_injected",
+        ),
+    )
+    with pytest.raises(PipelineEventError) as caught:
+        await pipeline.handle_event(event)
+    assert caught.value.code is ErrorCode.TOOL_CALL_STATE_CONFLICT

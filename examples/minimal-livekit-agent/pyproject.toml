@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hugging-voice-minimal-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Minimal LiveKit Agent example for livekit-hugging-voice"
 readme = "README.md"
 license = "Apache-2.0"
@@ -14,7 +14,7 @@ dependencies = [
   "aiohttp==3.14.2",
   "livekit-agents==1.6.6",
   "livekit-api==1.2.0",
-  "livekit-plugins-hugging-voice==0.1.0",
+  "livekit-plugins-hugging-voice==0.2.0",
 ]
 
 [tool.uv.sources]
