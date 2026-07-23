@@ -1,4 +1,4 @@
-.PHONY: sync lint format-check typecheck test check models models-verify docker-build docker-up docker-down demo-agent gpu-test packages checksums benchmark-summary image-digests
+.PHONY: sync lint format-check typecheck test coverage check models models-verify docker-build docker-up docker-down demo-agent gpu-test packages checksums benchmark-summary image-digests
 
 MODEL_ROOT ?= .models
 MODEL_MANIFEST ?= models/manifest.yaml
@@ -18,6 +18,13 @@ typecheck:
 
 test:
 	uv run pytest -q
+
+coverage:
+	uv run pytest -q \
+		--cov=hugging_voice_protocol \
+		--cov=livekit.plugins.hugging_voice \
+		--cov=hugging_voice_service \
+		--cov=examples/minimal-livekit-agent
 
 check: lint format-check typecheck test
 

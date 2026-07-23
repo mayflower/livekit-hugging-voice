@@ -73,17 +73,22 @@ class ContractServer:
     ignore_response: bool = False
     send_transcription: bool = True
     open_audio_frames: int = 2
+    response_audio_sequences: tuple[int, ...] = (0,)
     pause_response: bool = False
     default_language: str = "de"
     default_voice: str = "warm_female"
     tool_first: bool = False
+    reject_session_update_number: int | None = None
+    pause_session_update_number: int | None = None
 
     def __post_init__(self) -> None:
         self.events: asyncio.Queue[ClientEvent] = asyncio.Queue()
         self._runner: web.AppRunner | None = None
         self._response_count = 0
+        self._session_update_count = 0
         self.cancel_count = 0
         self.continue_response = asyncio.Event()
+        self.continue_session_update = asyncio.Event()
 
     @property
     def url(self) -> str:
@@ -131,13 +136,27 @@ class ContractServer:
             event = parse_client_event_json(message.data)
             await self.events.put(event)
             if isinstance(event, SessionUpdateEvent):
-                await websocket.send_str(
-                    SessionUpdatedEvent(
+                self._session_update_count += 1
+                if self._session_update_count == self.pause_session_update_number:
+                    await self.continue_session_update.wait()
+                if self._session_update_count == self.reject_session_update_number:
+                    response: ErrorEvent | SessionUpdatedEvent = ErrorEvent(
+                        event_id=f"evt_reject_{event.event_id}",
+                        session_id=event.session_id,
+                        error=ErrorPayload(
+                            code=ErrorCode.INVALID_CONFIGURATION,
+                            message="session update rejected",
+                            retryable=False,
+                            event_id=event.event_id,
+                        ),
+                    )
+                else:
+                    response = SessionUpdatedEvent(
                         event_id=f"evt_ack_{event.event_id}",
                         session_id=event.session_id,
                         source_event_id=event.event_id,
-                    ).model_dump_json()
-                )
+                    )
+                await websocket.send_str(response.model_dump_json())
             elif isinstance(event, ConversationItemCreateEvent):
                 await websocket.send_str(
                     ConversationItemCreatedEvent(
@@ -231,13 +250,14 @@ class ContractServer:
             ResponseOutputTextDoneEvent(**fields, text="Guten Tag. "),
         ]
         if not self.omit_audio:
-            events.append(
-                ResponseOutputAudioDeltaEvent(
-                    **fields,
-                    sequence=0,
-                    audio=base64.b64encode(bytes(960)).decode(),
+            for sequence in self.response_audio_sequences:
+                events.append(
+                    ResponseOutputAudioDeltaEvent(
+                        **fields,
+                        sequence=sequence,
+                        audio=base64.b64encode(bytes(960)).decode(),
+                    )
                 )
-            )
         events.extend(
             [
                 ResponseOutputAudioDoneEvent(**fields),
@@ -281,7 +301,7 @@ class ContractServer:
         events = [
             ResponseOutputAudioDeltaEvent(
                 **fields,
-                sequence=99,
+                sequence=self.open_audio_frames,
                 audio=base64.b64encode(bytes(960)).decode(),
             ),
             ResponseOutputAudioDoneEvent(**fields),
@@ -379,6 +399,74 @@ async def test_message_generation_is_lazy_until_first_output(
 
 
 @pytest.mark.asyncio
+async def test_slow_audio_consumer_backpressures_without_truncating_response(
+    unused_tcp_port: int,
+) -> None:
+    frame_count = 160
+    server = ContractServer(
+        unused_tcp_port,
+        response_audio_sequences=tuple(range(frame_count)),
+    )
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    session = model.session()
+    try:
+        generation = await asyncio.wait_for(session.generate_reply(), timeout=1.0)
+        message_stream = generation.message_stream.__aiter__()
+        message = await asyncio.wait_for(anext(message_stream), timeout=1.0)
+
+        # Let the bounded 128-frame channel fill before the consumer starts.
+        await asyncio.sleep(0.05)
+
+        async def collect_audio() -> list[rtc.AudioFrame]:
+            return [frame async for frame in message.audio_stream]
+
+        audio = await asyncio.wait_for(collect_audio(), timeout=2.0)
+
+        assert len(audio) == frame_count
+        assert sum(frame.duration for frame in audio) == pytest.approx(frame_count * 0.02)
+        with pytest.raises(StopAsyncIteration):
+            await anext(message_stream)
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_audio_sequence_gap_is_a_fatal_protocol_error(unused_tcp_port: int) -> None:
+    server = ContractServer(unused_tcp_port, response_audio_sequences=(0, 2))
+    await server.start()
+    model = RealtimeModel(
+        base_url=server.url,
+        token="contract-secret",
+        conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+    )
+    session = model.session()
+    errors: list[object] = []
+    failed = asyncio.Event()
+
+    def on_error(event: object) -> None:
+        errors.append(event)
+        failed.set()
+
+    session.on("error", on_error)
+    try:
+        generation = await asyncio.wait_for(session.generate_reply(), timeout=1.0)
+        message = await asyncio.wait_for(
+            anext(generation.message_stream.__aiter__()),
+            timeout=1.0,
+        )
+        await asyncio.wait_for(failed.wait(), timeout=1.0)
+        assert [frame async for frame in message.audio_stream] == []
+        assert any(
+            "audio sequence conflict" in str(getattr(error, "error", error)) for error in errors
+        )
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
 async def test_audio_commit_instruction_and_append_only_context_map_to_client_events(
     unused_tcp_port: int,
 ) -> None:
@@ -430,6 +518,114 @@ async def test_audio_commit_instruction_and_append_only_context_map_to_client_ev
         with pytest.raises(RealtimeError, match="append-only"):
             await session.update_chat_ctx(changed)
     finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_rejected_session_update_does_not_mutate_acknowledged_plugin_state(
+    unused_tcp_port: int,
+) -> None:
+    server = ContractServer(
+        unused_tcp_port,
+        send_transcription=False,
+        reject_session_update_number=2,
+    )
+    await server.start()
+    model = RealtimeModel(
+        base_url=server.url,
+        token="contract-secret",
+        instructions="Alt",
+    )
+    session = model.session()
+    try:
+        initial = await wait_client_event(server, "session.update")
+        assert isinstance(initial, SessionUpdateEvent)
+        assert initial.session.instructions == "Alt"
+        await asyncio.wait_for(session._connected.wait(), timeout=1.0)
+
+        with pytest.raises(RealtimeError, match="session update rejected"):
+            await session.update_instructions("Neu")
+        rejected = await wait_client_event(server, "session.update")
+        assert isinstance(rejected, SessionUpdateEvent)
+        assert rejected.session.instructions == "Neu"
+        assert session._instructions == "Alt"
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_rejected_background_option_update_rolls_back_local_choice(
+    unused_tcp_port: int,
+) -> None:
+    server = ContractServer(
+        unused_tcp_port,
+        send_transcription=False,
+        reject_session_update_number=2,
+    )
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    session = model.session()
+    rejected = asyncio.Event()
+    session.on("error", lambda event: rejected.set())
+    try:
+        await wait_client_event(server, "session.update")
+        await asyncio.wait_for(session._connected.wait(), timeout=1.0)
+
+        session.update_options(tool_choice="none")
+        update = await wait_client_event(server, "session.update")
+        assert isinstance(update, SessionUpdateEvent)
+        assert update.session.tool_choice == "none"
+        await asyncio.wait_for(rejected.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+
+        assert session._default_tool_choice == "auto"
+        await session.update_instructions("Weiter")
+        follow_up = await wait_client_event(server, "session.update")
+        assert isinstance(follow_up, SessionUpdateEvent)
+        assert follow_up.session.instructions == "Weiter"
+        assert follow_up.session.tool_choice == "auto"
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_sync_option_update_cannot_race_an_unacknowledged_configuration(
+    unused_tcp_port: int,
+) -> None:
+    server = ContractServer(
+        unused_tcp_port,
+        send_transcription=False,
+        pause_session_update_number=2,
+    )
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    session = model.session()
+    update_task: asyncio.Task[None] | None = None
+    try:
+        await wait_client_event(server, "session.update")
+        await asyncio.wait_for(session._connected.wait(), timeout=1.0)
+
+        update_task = asyncio.create_task(session.update_instructions("Serialisiert"))
+        pending = await wait_client_event(server, "session.update")
+        assert isinstance(pending, SessionUpdateEvent)
+        with pytest.raises(RealtimeError, match="configuration update is already pending"):
+            session.update_options(tool_choice="none")
+
+        server.continue_session_update.set()
+        await asyncio.wait_for(update_task, timeout=1.0)
+        session.update_options(tool_choice="none")
+        follow_up = await wait_client_event(server, "session.update")
+        assert isinstance(follow_up, SessionUpdateEvent)
+        assert follow_up.session.instructions == "Serialisiert"
+        assert follow_up.session.tool_choice == "none"
+        await asyncio.wait_for(session._configuration_idle.wait(), timeout=1.0)
+    finally:
+        server.continue_session_update.set()
+        if update_task is not None:
+            await asyncio.gather(update_task, return_exceptions=True)
         await model.aclose()
         await server.close()
 

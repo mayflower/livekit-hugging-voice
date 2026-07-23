@@ -47,7 +47,13 @@ def external_assets() -> tuple[Path, Path, Path]:
     return paths
 
 
-async def invoke_soak(tmp_path: Path, *, duration: float) -> list[dict[str, object]]:
+async def invoke_soak(
+    tmp_path: Path,
+    *,
+    duration: float,
+    cancel_every: int = 0,
+    reconnect_every: int = 0,
+) -> list[dict[str, object]]:
     token, wav_a, wav_b = external_assets()
     output = tmp_path / "raw.jsonl"
     process = await asyncio.create_subprocess_exec(
@@ -64,10 +70,9 @@ async def invoke_soak(tmp_path: Path, *, duration: float) -> list[dict[str, obje
         "--duration",
         str(duration),
         "--cancel-every",
-        "0",
+        str(cancel_every),
         "--reconnect-every",
-        "0",
-        "--no-realtime-audio",
+        str(reconnect_every),
         "--output",
         str(output),
         stdout=asyncio.subprocess.PIPE,
@@ -105,7 +110,12 @@ async def test_external_two_session_e2e(tmp_path: Path) -> None:
 async def test_external_two_session_soak(tmp_path: Path) -> None:
     if os.environ.get("HV_RUN_GPU_SOAK") != "1":
         pytest.skip("set HV_RUN_GPU_SOAK=1 for the 30-minute two-session soak")
-    records = await invoke_soak(tmp_path, duration=1_800.0)
+    records = await invoke_soak(
+        tmp_path,
+        duration=1_800.0,
+        cancel_every=7,
+        reconnect_every=11,
+    )
     turns = [record for record in records if record["record_type"] == "turn"]
     assert {record["session_label"] for record in turns} == {"alpha", "beta"}
     assert all(record["cross_session_leak"] is False for record in turns)

@@ -7,9 +7,11 @@ requires-python = ">=3.11,<3.12"
 [dependency-groups]
 dev = [
   "build==1.3.0",
+  "httpx2==2.7.0",
   "mypy==1.17.1",
   "pytest==8.4.1",
   "pytest-asyncio==1.1.0",
+  "pytest-cov==7.1.0",
   "ruff==0.12.5",
   "types-pyyaml==6.0.12.20250516",
 ]
@@ -31,7 +33,10 @@ line-length = 100
 extend-exclude = [".models", "benchmarks/reports"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "C90", "RUF"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 28
 
 [tool.ruff.format]
 quote-style = "double"
@@ -49,6 +54,15 @@ markers = [
   "gpu: requires a real NVIDIA GPU and local verified model weights",
   "integration: crosses package or process boundaries",
 ]
+
+[tool.coverage.run]
+branch = true
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 79
+show_missing = true
+skip_covered = true
 
 [tool.mypy]
 python_version = "3.11"

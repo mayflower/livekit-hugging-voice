@@ -51,7 +51,11 @@ to remain exactly one.
 
 The opt-in GPU suite additionally starts a native LiveKit `AgentSession` with only the
 Hugging Voice `RealtimeModel`, streams the German WAV through LiveKit audio frames, and
-requires both a final builtin-transcription event and captured 24 kHz response audio.
+requires both a final builtin-transcription event and completed 24 kHz response audio,
+including more than the first second of the first answer. The 30-minute external soak
+paces input audio in real time, cancels every seventh turn, and reconnects every
+eleventh turn so the scheduled run exercises the lifecycle paths instead of measuring
+only uninterrupted steady state.
 Its self-hosted runner must configure `HV_GPU_MODEL_ROOT` and `HV_GPU_MODEL_LOCK` as
 absolute paths outside the Actions checkout. Checkout cleanup therefore cannot remove
 the large verified model cache or its generated lock; the workflow verifies both before

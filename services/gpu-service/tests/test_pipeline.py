@@ -10,7 +10,10 @@ from hugging_voice_protocol.errors import ErrorCode
 from hugging_voice_protocol.events import (
     ConversationItemCreateEvent,
     FunctionCallConversationItem,
+    FunctionCallOutputConversationItem,
     InputAudioBufferAppendEvent,
+    InputAudioBufferCommitEvent,
+    InputTranscriptionCompletedEvent,
     ResponseCancelEvent,
     ResponseCreateEvent,
     ResponseDoneEvent,
@@ -20,6 +23,9 @@ from hugging_voice_protocol.events import (
     ResponseOutputTextDeltaEvent,
     ResponseOutputTextDoneEvent,
     ServerEvent,
+    ServerVADConfig,
+    SessionConfig,
+    SessionUpdateEvent,
 )
 from hugging_voice_service.cancellation import GenerationToken
 from hugging_voice_service.capacity import SessionSlot
@@ -82,6 +88,21 @@ class UnusedSTT:
 
     async def wait_session_idle(self, session_id: str) -> None:
         del session_id
+
+
+class SequencedBlockingSTT(UnusedSTT):
+    def __init__(self) -> None:
+        self.jobs: list[STTJob] = []
+        self.first_started = asyncio.Event()
+        self.release_first = asyncio.Event()
+
+    async def submit_final(self, job: STTJob) -> str:
+        self.jobs.append(job)
+        if len(self.jobs) == 1:
+            self.first_started.set()
+            await self.release_first.wait()
+            return "Erster Turn"
+        return "Zweiter Turn"
 
 
 class ImmediateTTS:
@@ -171,6 +192,36 @@ class ToolGemma:
         yield TextUsage(prompt_tokens=4, completion_tokens=8, total_tokens=12)
 
 
+class ToolThenTextGemma:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def stream_response(
+        self,
+        *,
+        messages: Sequence[GemmaMessage],
+        instructions: str = "",
+        language_instruction: str = "",
+        system_prompt: str = "",
+        tools: object = (),
+        tool_choice: object = "auto",
+        slot_id: int = 0,
+    ) -> AsyncIterator[ToolCall | TextDelta | TextUsage]:
+        del messages, instructions, language_instruction, system_prompt, tools, slot_id
+        self.calls += 1
+        if self.calls == 1:
+            yield ToolCall(
+                call_id="call_add",
+                name="add_numbers",
+                arguments='{"a":19,"b":23}',
+            )
+            yield TextUsage(prompt_tokens=4, completion_tokens=8, total_tokens=12)
+            return
+        assert tool_choice == "none"
+        yield TextDelta("Das Ergebnis ist 42.")
+        yield TextUsage(prompt_tokens=12, completion_tokens=5, total_tokens=17)
+
+
 def make_state(*, probability: float = 0.0) -> tuple[SessionState, RecordingTransport]:
     transport = RecordingTransport()
     state = SessionState(
@@ -189,6 +240,162 @@ def make_state(*, probability: float = 0.0) -> tuple[SessionState, RecordingTran
 
 async def wait_for_response_end(pipeline: VoicePipeline) -> None:
     await asyncio.wait_for(pipeline.wait_response_idle(), timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_instruction_update_preserves_buffered_audio_and_vad_state() -> None:
+    state, transport = make_state()
+    pipeline = VoicePipeline(
+        state,
+        stt=UnusedSTT(),
+        tts=ImmediateTTS(),
+        gemma=ImmediateGemma(),
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+    buffered_audio = bytes(1_280)
+    state.input_audio_buffer.append(buffered_audio)
+    state.vad.process_pcm16(bytes(256 * 2))
+    assert state.vad.buffered_bytes == 256 * 2
+
+    await pipeline.handle_event(
+        SessionUpdateEvent(
+            event_id="evt_update",
+            session_id=state.session_id,
+            session=SessionConfig(
+                instructions="Neue Anweisung",
+                turn_detection=ServerVADConfig(min_speech_ms=96),
+            ),
+        )
+    )
+
+    assert state.instructions == "Neue Anweisung"
+    assert state.input_audio_buffer.size_bytes == len(buffered_audio)
+    assert state.vad.buffered_bytes == 256 * 2
+    assert transport.events[-1].type == "session.updated"
+
+
+@pytest.mark.asyncio
+async def test_vad_update_with_buffered_audio_is_rejected_atomically() -> None:
+    state, _ = make_state()
+    pipeline = VoicePipeline(
+        state,
+        stt=UnusedSTT(),
+        tts=ImmediateTTS(),
+        gemma=ImmediateGemma(),
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+    state.instructions = "Alt"
+    state.input_audio_buffer.append(bytes(1_280))
+
+    with pytest.raises(ValueError, match="input audio is buffered"):
+        await pipeline.handle_event(
+            SessionUpdateEvent(
+                event_id="evt_update",
+                session_id=state.session_id,
+                session=SessionConfig(
+                    instructions="Darf nicht übernommen werden",
+                    turn_detection=ServerVADConfig(
+                        threshold=0.7,
+                        min_speech_ms=96,
+                    ),
+                ),
+            )
+        )
+
+    assert state.instructions == "Alt"
+    assert state.vad.configuration[0] == 0.6
+    assert state.input_audio_buffer.size_bytes == 1_280
+
+
+@pytest.mark.asyncio
+async def test_final_stt_does_not_block_audio_ingestion_for_the_next_turn() -> None:
+    state, transport = make_state()
+    state.vad_enabled = False
+    stt = SequencedBlockingSTT()
+    pipeline = VoicePipeline(
+        state,
+        stt=stt,
+        tts=ImmediateTTS(),
+        gemma=ImmediateGemma(),
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+
+    for sequence in range(2):
+        await pipeline.handle_event(
+            InputAudioBufferAppendEvent(
+                event_id=f"evt_audio_{sequence}",
+                session_id=state.session_id,
+                sequence=sequence,
+                audio=base64.b64encode(bytes(1_280)).decode("ascii"),
+            )
+        )
+        await asyncio.wait_for(
+            pipeline.handle_event(
+                InputAudioBufferCommitEvent(
+                    event_id=f"evt_commit_{sequence}",
+                    session_id=state.session_id,
+                )
+            ),
+            timeout=0.1,
+        )
+        if sequence == 0:
+            await asyncio.wait_for(stt.first_started.wait(), timeout=1.0)
+
+    assert len(stt.jobs) == 1
+    assert pipeline._completed_turns.qsize() == 1
+    stt.release_first.set()
+    await asyncio.wait_for(pipeline.wait_turns_idle(), timeout=1.0)
+    await wait_for_response_end(pipeline)
+
+    completed = [
+        event for event in transport.events if isinstance(event, InputTranscriptionCompletedEvent)
+    ]
+    assert [event.transcript for event in completed] == ["Erster Turn", "Zweiter Turn"]
+    assert [entry.content for entry in state.conversation.entries if entry.role == "user"][-1] == (
+        "Zweiter Turn"
+    )
+
+
+@pytest.mark.asyncio
+async def test_drain_cancels_blocked_final_stt_worker_and_clears_pending_turns() -> None:
+    state, _ = make_state()
+    state.vad_enabled = False
+    stt = SequencedBlockingSTT()
+    pipeline = VoicePipeline(
+        state,
+        stt=stt,
+        tts=ImmediateTTS(),
+        gemma=ImmediateGemma(),
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+
+    for sequence in range(2):
+        await pipeline.handle_event(
+            InputAudioBufferAppendEvent(
+                event_id=f"evt_audio_{sequence}",
+                session_id=state.session_id,
+                sequence=sequence,
+                audio=base64.b64encode(bytes(1_280)).decode("ascii"),
+            )
+        )
+        await pipeline.handle_event(
+            InputAudioBufferCommitEvent(
+                event_id=f"evt_commit_{sequence}",
+                session_id=state.session_id,
+            )
+        )
+        if sequence == 0:
+            await asyncio.wait_for(stt.first_started.wait(), timeout=1.0)
+
+    await asyncio.wait_for(pipeline.drain(), timeout=1.0)
+
+    assert pipeline._turn_worker_task is None
+    assert pipeline._completed_turns.empty()
+    await asyncio.wait_for(pipeline.wait_turns_idle(), timeout=0.1)
 
 
 @pytest.mark.asyncio
@@ -339,6 +546,63 @@ async def test_tool_generation_is_silent_and_never_starts_tts() -> None:
     )
     done = [event for event in transport.events if isinstance(event, ResponseDoneEvent)]
     assert len(done) == 1 and done[0].reason.value == "tool_call"
+
+
+@pytest.mark.asyncio
+async def test_tool_result_ack_then_final_response_runs_through_service_pipeline() -> None:
+    state, transport = make_state()
+    gemma = ToolThenTextGemma()
+    pipeline = VoicePipeline(
+        state,
+        stt=UnusedSTT(),
+        tts=ImmediateTTS(),
+        gemma=gemma,
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+    await pipeline.handle_event(
+        ResponseCreateEvent(event_id="evt_tool", session_id=state.session_id)
+    )
+    await wait_for_response_end(pipeline)
+    pending = state.pending_call
+    assert pending is not None
+
+    await pipeline.handle_event(
+        ConversationItemCreateEvent(
+            event_id="evt_tool_output",
+            session_id=state.session_id,
+            item=FunctionCallOutputConversationItem(
+                id="item_tool_output",
+                call_id=pending.call_id,
+                name=pending.name,
+                output="42",
+                is_error=False,
+                turn_id=pending.turn_id,
+                turn_revision=pending.turn_revision,
+                generation_id=pending.generation_id,
+                response_id=pending.response_id,
+            ),
+        )
+    )
+    assert state.pending_call is None
+    assert transport.events[-1].type == "conversation.item.created"
+
+    await pipeline.handle_event(
+        ResponseCreateEvent(
+            event_id="evt_final",
+            session_id=state.session_id,
+            tool_choice="none",
+        )
+    )
+    await wait_for_response_end(pipeline)
+
+    done = [event for event in transport.events if isinstance(event, ResponseDoneEvent)]
+    assert [event.reason.value for event in done] == ["tool_call", "completed"]
+    assert any(
+        isinstance(event, ResponseOutputTextDeltaEvent) and "42" in event.delta
+        for event in transport.events
+    )
+    assert any(isinstance(event, ResponseOutputAudioDeltaEvent) for event in transport.events)
 
 
 @pytest.mark.asyncio

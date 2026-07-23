@@ -192,6 +192,50 @@ async def test_tool_updates_are_idempotent_then_frozen_after_generation() -> Non
 
 
 @pytest.mark.asyncio
+async def test_generate_reply_validation_failure_does_not_leave_pending_state() -> None:
+    model = RealtimeModel(
+        base_url="ws://127.0.0.1:1",
+        token="secret",
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.01),
+    )
+    session = model.session()
+    try:
+        with pytest.raises(RealtimeError, match="provider tools"):
+            session.generate_reply(tools=[ProviderTool(id="provider")])
+        assert session._pending_generation is None
+        assert session._pending_event_id is None
+        assert session._pending_timeout_task is None
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_generate_reply_queue_failure_rolls_back_pending_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = RealtimeModel(
+        base_url="ws://127.0.0.1:1",
+        token="secret",
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.01),
+    )
+    session = model.session()
+
+    def fail_queue(command: object) -> None:
+        del command
+        raise RealtimeError("queue failed")
+
+    monkeypatch.setattr(session, "_queue_sync", fail_queue)
+    try:
+        with pytest.raises(RealtimeError, match="queue failed"):
+            session.generate_reply()
+        assert session._pending_generation is None
+        assert session._pending_event_id is None
+        assert session._pending_timeout_task is None
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.asyncio
 async def test_barge_in_invalidates_dangling_call_for_result_and_replay() -> None:
     model = RealtimeModel(
         base_url="ws://127.0.0.1:1",

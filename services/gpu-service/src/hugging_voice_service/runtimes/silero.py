@@ -18,6 +18,7 @@ class SileroModel(Protocol):
 
 
 SampleTensorFactory = Callable[[Any], Any]
+VADConfiguration = tuple[float, int, int, int, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +59,13 @@ class SessionVAD:
         model_factory: Callable[[], SileroModel] = _load_bundled_model,
         sample_tensor_factory: SampleTensorFactory = _to_torch_tensor,
     ) -> None:
+        self._configuration: VADConfiguration = (
+            threshold,
+            min_speech_ms,
+            min_speech_continuation_ms,
+            min_silence_ms,
+            speech_pad_ms,
+        )
         self._threshold = threshold
         self._min_speech_samples = self._ms_to_samples(min_speech_ms)
         self._continuation_samples = self._ms_to_samples(min_speech_continuation_ms)
@@ -83,6 +91,10 @@ class SessionVAD:
     @property
     def speaking(self) -> bool:
         return self._speech_start is not None
+
+    @property
+    def configuration(self) -> VADConfiguration:
+        return self._configuration
 
     def process_pcm16(self, payload: bytes) -> list[VADSignal]:
         if len(payload) % PCM16_BYTES_PER_SAMPLE:
@@ -120,15 +132,26 @@ class SessionVAD:
         min_speech_continuation_ms: int,
         min_silence_ms: int,
         speech_pad_ms: int,
-    ) -> None:
+    ) -> bool:
         if not 0.1 <= threshold <= 0.95:
             raise ValueError("Silero threshold is outside the supported range")
+        configuration = (
+            threshold,
+            min_speech_ms,
+            min_speech_continuation_ms,
+            min_silence_ms,
+            speech_pad_ms,
+        )
+        if configuration == self._configuration:
+            return False
+        self._configuration = configuration
         self._threshold = threshold
         self._min_speech_samples = self._ms_to_samples(min_speech_ms)
         self._continuation_samples = self._ms_to_samples(min_speech_continuation_ms)
         self._min_silence_samples = self._ms_to_samples(min_silence_ms)
         self._speech_pad_samples = self._ms_to_samples(speech_pad_ms)
         self.reset()
+        return True
 
     def _speech_probability(self, pcm16: bytes) -> float:
         samples = array("h")

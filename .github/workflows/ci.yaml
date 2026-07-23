@@ -28,7 +28,7 @@ jobs:
       - name: Type check
         run: uv run mypy packages services examples
       - name: Test
-        run: uv run pytest -q
+        run: make coverage
       - name: Build Python artifacts
         run: |
           uv run python -m build packages/hugging-voice-protocol --outdir dist

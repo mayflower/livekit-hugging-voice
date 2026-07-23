@@ -8,7 +8,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
@@ -82,7 +82,7 @@ from livekit.agents.metrics import RealtimeModelMetrics
 from livekit.agents.metrics.base import Metadata
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.utils import aio
-from livekit.agents.utils.aio.channel import ChanEmpty, ChanFull
+from livekit.agents.utils.aio.channel import ChanEmpty
 
 from .audio import InputAudioProcessor
 from .endpoint_resolver import EndpointResolver
@@ -178,6 +178,7 @@ class _ResponseState:
     function_channel: aio.Chan[FunctionCall]
     text: str = ""
     first_audio_at: float | None = None
+    next_audio_sequence: int = 0
     saw_text: bool = False
     saw_audio: bool = False
     cancelled: bool = False
@@ -334,6 +335,9 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         self._pending_timeout_task: asyncio.Task[None] | None = None
         self._ack_waiters: dict[str, asyncio.Future[None]] = {}
         self._ack_tasks: set[asyncio.Task[None]] = set()
+        self._configuration_lock = asyncio.Lock()
+        self._configuration_idle = asyncio.Event()
+        self._configuration_idle.set()
         self._default_tool_choice: ToolChoice = "auto"
         self._tools_frozen = False
         self._wire_item_ids: dict[str, str] = {}
@@ -355,9 +359,11 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
     async def update_instructions(self, instructions: str) -> None:
         if len(instructions) > 8_000:
             raise RealtimeError("instructions exceed the 8,000 character limit")
-        self._instructions = instructions
-        if self._connected.is_set():
-            await self._queue_with_ack(_Command("session_update", _id("evt")))
+        async with self._configuration_lock:
+            config = self._session_config(instructions=instructions)
+            if self._connected.is_set():
+                await self._queue_configuration_update(config)
+            self._instructions = instructions
 
     async def update_speech_options(
         self,
@@ -367,24 +373,20 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         voice_instructions: NotGivenOr[str | None] = NOT_GIVEN,
     ) -> None:
         """Update language, voice, or Qwen speaking-style instructions."""
-        try:
-            validated = SessionConfig(
-                instructions=self._instructions,
-                language=self._language if language is None else language,
-                voice=self._voice if voice is None else voice,
-                voice_instructions=(
-                    self._voice_instructions
-                    if not utils.is_given(voice_instructions)
-                    else voice_instructions
-                ),
-            )
-        except ValueError as exc:
-            raise RealtimeError(f"invalid speech configuration: {exc}") from exc
-        self._language = validated.language
-        self._voice = validated.voice
-        self._voice_instructions = validated.voice_instructions
-        if self._connected.is_set():
-            await self._queue_with_ack(_Command("session_update", _id("evt")))
+        async with self._configuration_lock:
+            try:
+                validated = self._session_config(
+                    language=self._language if language is None else language,
+                    voice=self._voice if voice is None else voice,
+                    voice_instructions=voice_instructions,
+                )
+            except ValueError as exc:
+                raise RealtimeError(f"invalid speech configuration: {exc}") from exc
+            if self._connected.is_set():
+                await self._queue_configuration_update(validated)
+            self._language = validated.language
+            self._voice = validated.voice
+            self._voice_instructions = validated.voice_instructions
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         current = list(self._chat_ctx.items)
@@ -406,14 +408,14 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
 
     async def update_tools(self, tools: list[Tool]) -> None:
         context = ToolContext(tools)
-        self._protocol_tools(context)
-        if self._tools_frozen and self._protocol_tools(context) != self._protocol_tools(
-            self._tools
-        ):
-            raise RealtimeError("Hugging Voice tools are immutable after connection")
-        self._tools = context
-        if self._connected.is_set():
-            await self._queue_with_ack(_Command("session_update", _id("evt")))
+        protocol_tools = self._protocol_tools(context)
+        async with self._configuration_lock:
+            if self._tools_frozen and protocol_tools != self._protocol_tools(self._tools):
+                raise RealtimeError("Hugging Voice tools are immutable after connection")
+            config = self._session_config(tools=protocol_tools)
+            if self._connected.is_set():
+                await self._queue_configuration_update(config)
+            self._tools = context
 
     def update_options(
         self,
@@ -421,9 +423,23 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         tool_choice: NotGivenOr[ToolChoice | None] = NOT_GIVEN,
     ) -> None:
         if utils.is_given(tool_choice):
-            self._default_tool_choice = "auto" if tool_choice is None else tool_choice
+            previous = self._default_tool_choice
+            candidate: ToolChoice = "auto" if tool_choice is None else tool_choice
+            config = self._session_config(tool_choice=candidate)
             if self._connected.is_set():
-                self._queue_sync_with_ack(_Command("session_update", _id("evt")))
+                if not self._configuration_idle.is_set():
+                    raise RealtimeError("a configuration update is already pending")
+                self._configuration_idle.clear()
+                try:
+                    self._queue_sync_with_ack(
+                        _Command("session_update", _id("evt"), config),
+                        on_rejected=lambda: self._restore_tool_choice(candidate, previous),
+                        on_complete=self._configuration_idle.set,
+                    )
+                except Exception:
+                    self._configuration_idle.set()
+                    raise
+            self._default_tool_choice = candidate
 
     def push_audio(self, frame: rtc.AudioFrame) -> None:
         self._ensure_audio_may_queue()
@@ -447,19 +463,27 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         response_instructions = instructions if utils.is_given(instructions) else None
         if response_instructions is not None and len(response_instructions) > 8_000:
             raise RealtimeError("response instructions exceed the protocol limit")
-        future = asyncio.get_running_loop().create_future()
         event_id = _id("evt")
-        self._pending_generation = future
-        self._pending_event_id = event_id
-        self._pending_timeout_task = asyncio.create_task(
-            self._expire_generation_request(future, event_id)
-        )
         response_tools = self._tools if not utils.is_given(tools) else ToolContext(tools)
         response_choice = (
             self._default_tool_choice if not utils.is_given(tool_choice) else tool_choice
         )
         payload = (response_instructions, self._protocol_tools(response_tools), response_choice)
-        self._queue_sync(_Command("response_create", event_id, payload))
+        future = asyncio.get_running_loop().create_future()
+        self._pending_generation = future
+        self._pending_event_id = event_id
+        self._pending_timeout_task = asyncio.create_task(
+            self._expire_generation_request(future, event_id)
+        )
+        try:
+            self._queue_sync(_Command("response_create", event_id, payload))
+        except Exception:
+            self._pending_generation = None
+            self._pending_event_id = None
+            self._pending_timeout_task.cancel()
+            self._pending_timeout_task = None
+            future.cancel()
+            raise
         return future
 
     def commit_audio(self) -> None:
@@ -685,7 +709,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                 "hugging_voice_server_event_received",
                 ServerEventReceived(type=event.type, event_id=event.event_id),
             )
-            self._handle_server_event(event)
+            await self._handle_server_event(event)
 
     async def _receive_event(self, ws: aiohttp.ClientWebSocketResponse) -> ServerEvent:
         message = await ws.receive()
@@ -733,9 +757,9 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                 raise _FatalProtocolError("server acknowledged the wrong bootstrap event")
             if isinstance(received, ErrorEvent) and received.error.event_id == event.event_id:
                 raise RealtimeError(received.error.message)
-            self._handle_server_event(received)
+            await self._handle_server_event(received)
 
-    def _handle_server_event(self, event: ServerEvent) -> None:
+    async def _handle_server_event(self, event: ServerEvent) -> None:
         if isinstance(event, SessionUpdatedEvent | ConversationItemCreatedEvent):
             waiter = self._ack_waiters.pop(event.source_event_id, None)
             if waiter is not None and not waiter.done():
@@ -773,15 +797,45 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                     role="user",
                     content=event.transcript,
                 )
-        elif isinstance(event, ResponseCreatedEvent):
+        elif isinstance(
+            event,
+            ResponseCreatedEvent
+            | ResponseOutputTextDeltaEvent
+            | ResponseOutputTextDoneEvent
+            | ResponseOutputAudioDeltaEvent
+            | ResponseOutputAudioDoneEvent
+            | ResponseOutputFunctionCallDoneEvent
+            | ResponseDoneEvent,
+        ):
+            await self._handle_response_event(event)
+        elif isinstance(event, ErrorEvent):
+            if event.error.event_id is not None:
+                waiter = self._ack_waiters.pop(event.error.event_id, None)
+                if waiter is not None and not waiter.done():
+                    waiter.set_exception(RealtimeError(event.error.message))
+            self._emit_error(RealtimeError(event.error.message), recoverable=event.error.retryable)
+
+    async def _handle_response_event(
+        self,
+        event: (
+            ResponseCreatedEvent
+            | ResponseOutputTextDeltaEvent
+            | ResponseOutputTextDoneEvent
+            | ResponseOutputAudioDeltaEvent
+            | ResponseOutputAudioDoneEvent
+            | ResponseOutputFunctionCallDoneEvent
+            | ResponseDoneEvent
+        ),
+    ) -> None:
+        if isinstance(event, ResponseCreatedEvent):
             self._response_created(event)
         elif isinstance(event, ResponseOutputTextDeltaEvent):
             response = self._matching_response(event.generation_id)
             if response is not None:
-                self._start_message(response)
+                await self._start_message(response)
                 response.saw_text = True
                 response.text += event.delta
-                self._channel_send(response.text_channel, event.delta)
+                await response.text_channel.send(event.delta)
         elif isinstance(event, ResponseOutputTextDoneEvent):
             response = self._matching_response(event.generation_id)
             if response is not None:
@@ -789,21 +843,26 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         elif isinstance(event, ResponseOutputAudioDeltaEvent):
             response = self._matching_response(event.generation_id)
             if response is not None:
-                self._start_message(response)
+                if event.sequence != response.next_audio_sequence:
+                    raise _FatalProtocolError(
+                        "server audio sequence conflict: "
+                        f"expected={response.next_audio_sequence} received={event.sequence}"
+                    )
+                response.next_audio_sequence += 1
+                await self._start_message(response)
                 payload = decode_pcm16_base64(event.audio)
                 if len(payload) != 960:
                     raise _FatalProtocolError("server audio frame is not exactly 20 ms")
                 response.saw_audio = True
                 if response.first_audio_at is None:
                     response.first_audio_at = time.monotonic()
-                self._channel_send(
-                    response.audio_channel,
+                await response.audio_channel.send(
                     rtc.AudioFrame(
                         data=payload,
                         sample_rate=24_000,
                         num_channels=1,
                         samples_per_channel=480,
-                    ),
+                    )
                 )
         elif isinstance(event, ResponseOutputAudioDoneEvent):
             response = self._matching_response(event.generation_id)
@@ -837,7 +896,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                         },
                     )
                     self._chat_ctx.insert(call)
-                    self._channel_send(response.function_channel, call)
+                    await response.function_channel.send(call)
                     self._emit_metrics(response, event)
                     self._finish_response(response, cancelled=False, add_to_chat=False)
                     return
@@ -854,12 +913,6 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                     cancelled=cancelled,
                     add_to_chat=not cancelled,
                 )
-        elif isinstance(event, ErrorEvent):
-            if event.error.event_id is not None:
-                waiter = self._ack_waiters.pop(event.error.event_id, None)
-                if waiter is not None and not waiter.done():
-                    waiter.set_exception(RealtimeError(event.error.message))
-            self._emit_error(RealtimeError(event.error.message), recoverable=event.error.retryable)
 
     async def _queue_with_ack(self, command: _Command) -> None:
         if len(self._ack_waiters) >= 32:
@@ -876,7 +929,21 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         finally:
             self._ack_waiters.pop(command.event_id, None)
 
-    def _queue_sync_with_ack(self, command: _Command) -> None:
+    async def _queue_configuration_update(self, config: SessionConfig) -> None:
+        await self._configuration_idle.wait()
+        self._configuration_idle.clear()
+        try:
+            await self._queue_with_ack(_Command("session_update", _id("evt"), config))
+        finally:
+            self._configuration_idle.set()
+
+    def _queue_sync_with_ack(
+        self,
+        command: _Command,
+        *,
+        on_rejected: Callable[[], None] | None = None,
+        on_complete: Callable[[], None] | None = None,
+    ) -> None:
         if len(self._ack_waiters) >= 32:
             raise RealtimeError("too many pending Hugging Voice acknowledgements")
         future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
@@ -886,7 +953,14 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         except Exception:
             self._ack_waiters.pop(command.event_id, None)
             raise
-        task = asyncio.create_task(self._observe_background_ack(command, future))
+        task = asyncio.create_task(
+            self._observe_background_ack(
+                command,
+                future,
+                on_rejected=on_rejected,
+                on_complete=on_complete,
+            )
+        )
         self._ack_tasks.add(task)
         task.add_done_callback(self._ack_tasks.discard)
 
@@ -894,6 +968,9 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         self,
         command: _Command,
         future: asyncio.Future[None],
+        *,
+        on_rejected: Callable[[], None] | None,
+        on_complete: Callable[[], None] | None,
     ) -> None:
         try:
             await asyncio.wait_for(future, timeout=self._model._conn_options.timeout)
@@ -904,9 +981,13 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                 self._schedule_fatal(_ack_timeout_error(command.kind))
         except RealtimeError:
             # The server event and reconnect path already report this rejection.
+            if on_rejected is not None:
+                on_rejected()
             return
         finally:
             self._ack_waiters.pop(command.event_id, None)
+            if on_complete is not None:
+                on_complete()
 
     def _response_created(self, event: ResponseCreatedEvent) -> None:
         if self._response is not None:
@@ -947,12 +1028,11 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
             pending.set_result(generation)
         self.emit("generation_created", generation)
 
-    def _start_message(self, response: _ResponseState) -> None:
+    async def _start_message(self, response: _ResponseState) -> None:
         if response.message_started:
             return
         response.message_started = True
-        self._channel_send(
-            response.message_channel,
+        await response.message_channel.send(
             MessageGeneration(
                 message_id=response.message_id,
                 text_stream=response.text_channel,
@@ -1082,7 +1162,10 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         if session_id is None:
             raise ConnectionError("Hugging Voice session ID is unavailable")
         if command.kind == "session_update":
-            return self._session_update_event(event_id=command.event_id)
+            config = command.payload
+            if config is not None and not isinstance(config, SessionConfig):
+                raise RealtimeError("invalid queued Hugging Voice session configuration")
+            return self._session_update_event(event_id=command.event_id, config=config)
         if command.kind == "conversation_item":
             item = command.payload
             if isinstance(item, ChatMessage):
@@ -1188,22 +1271,50 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
             generation_id=generation_id,
         )
 
-    def _session_update_event(self, *, event_id: str | None = None) -> SessionUpdateEvent:
+    def _session_update_event(
+        self,
+        *,
+        event_id: str | None = None,
+        config: SessionConfig | None = None,
+    ) -> SessionUpdateEvent:
         session_id = self._session_id
         if session_id is None:
             raise ConnectionError("Hugging Voice session ID is unavailable")
         return SessionUpdateEvent(
             event_id=event_id or _id("evt"),
             session_id=session_id,
-            session=SessionConfig(
-                instructions=self._instructions,
-                tools=self._protocol_tools(self._tools),
-                tool_choice=cast(Any, self._default_tool_choice),
-                language=self._language,
-                voice=self._voice,
-                voice_instructions=self._voice_instructions,
+            session=config or self._session_config(),
+        )
+
+    def _session_config(
+        self,
+        *,
+        instructions: str | None = None,
+        language: str | None = None,
+        voice: str | None = None,
+        voice_instructions: NotGivenOr[str | None] = NOT_GIVEN,
+        tools: NotGivenOr[tuple[ProtocolFunctionTool, ...]] = NOT_GIVEN,
+        tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
+    ) -> SessionConfig:
+        return SessionConfig(
+            instructions=self._instructions if instructions is None else instructions,
+            tools=self._protocol_tools(self._tools) if not utils.is_given(tools) else tools,
+            tool_choice=cast(
+                Any,
+                self._default_tool_choice if not utils.is_given(tool_choice) else tool_choice,
+            ),
+            language=self._language if language is None else language,
+            voice=self._voice if voice is None else voice,
+            voice_instructions=(
+                self._voice_instructions
+                if not utils.is_given(voice_instructions)
+                else voice_instructions
             ),
         )
+
+    def _restore_tool_choice(self, candidate: ToolChoice, previous: ToolChoice) -> None:
+        if self._default_tool_choice == candidate:
+            self._default_tool_choice = previous
 
     def _conversation_command(self, item: object) -> _Command:
         return _Command("conversation_item", _id("evt"), item)
@@ -1367,13 +1478,6 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                     future.set_exception(RealtimeError("response.created timed out"))
         except asyncio.CancelledError:
             return
-
-    @staticmethod
-    def _channel_send(channel: aio.Chan[ChannelValue], value: ChannelValue) -> None:
-        try:
-            channel.send_nowait(value)
-        except ChanFull as exc:
-            raise _FatalSessionError("LiveKit generation channel is full") from exc
 
     @staticmethod
     def _drain_channel(channel: aio.Chan[ChannelValue]) -> None:

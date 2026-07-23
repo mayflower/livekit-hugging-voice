@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from hugging_voice_protocol.audio import decode_pcm16_base64
-from hugging_voice_protocol.errors import ErrorCode
+from hugging_voice_protocol.errors import CloseCode, ErrorCode
 from hugging_voice_protocol.events import (
     ClientEvent,
     ConversationItemCreatedEvent,
@@ -138,8 +138,18 @@ class ResponseContext:
     cancel_reason: ResponseReason = ResponseReason.CLIENT_CANCELLED
 
 
+@dataclass(frozen=True, slots=True)
+class CompletedTurn:
+    turn_id: str
+    revision: int
+    audio: bytes
+    transcription_enabled: bool
+    speech_stopped_at: float
+
+
 class VoicePipeline:
     partial_interval_seconds = 0.5
+    completed_turn_queue_size = 4
 
     def __init__(
         self,
@@ -161,6 +171,12 @@ class VoicePipeline:
         self._response_task: asyncio.Task[None] | None = None
         self._partial_task: asyncio.Task[None] | None = None
         self._completed_turn: tuple[str, int] | None = None
+        self._completed_turns: asyncio.Queue[CompletedTurn] = asyncio.Queue(
+            maxsize=self.completed_turn_queue_size
+        )
+        self._turn_worker_task: asyncio.Task[None] | None = None
+        self._turns_idle = asyncio.Event()
+        self._turns_idle.set()
         self._draining = False
         self._speech_stopped_at: float | None = None
         self._response_idle = asyncio.Event()
@@ -173,6 +189,9 @@ class VoicePipeline:
 
     async def wait_response_idle(self) -> None:
         await self._response_idle.wait()
+
+    async def wait_turns_idle(self) -> None:
+        await self._turns_idle.wait()
 
     async def handle_event(self, event: ClientEvent) -> None:
         if self._draining:
@@ -216,6 +235,14 @@ class VoicePipeline:
             self._partial_task.cancel()
             await asyncio.gather(self._partial_task, return_exceptions=True)
             self._partial_task = None
+        if self._turn_worker_task is not None:
+            self._turn_worker_task.cancel()
+            await asyncio.gather(self._turn_worker_task, return_exceptions=True)
+            self._turn_worker_task = None
+        while not self._completed_turns.empty():
+            self._completed_turns.get_nowait()
+            self._completed_turns.task_done()
+        self._turns_idle.set()
         await self._cancel_response(reason=ResponseReason.TRANSPORT_ERROR)
         await self._stt.cancel_session(self.state.session_id)
         await self._stt.wait_session_idle(self.state.session_id)
@@ -246,19 +273,40 @@ class VoicePipeline:
         )
 
     async def _update_session(self, event: SessionUpdateEvent) -> None:
-        if self.state.current_turn_id is not None and self.state.speech_start_sample is not None:
-            raise ValueError("cannot change VAD settings during an active speech turn")
         config = event.session
         language = config.language or self._speech.default_language
         voice = config.voice or self._speech.default_voice
         self._speech.resolve_language(language)
         self._speech.resolve_voice(voice)
-        self.state.instructions = config.instructions
         if self.state.tools_frozen and config.tools != self.state.tools:
             raise PipelineEventError(
                 ErrorCode.INVALID_TOOL_CONFIGURATION,
                 "tools are immutable after the initial session update",
             )
+        vad_configuration = (
+            config.turn_detection.threshold,
+            config.turn_detection.min_speech_ms,
+            config.turn_detection.min_speech_continuation_ms,
+            config.turn_detection.min_silence_ms,
+            config.turn_detection.speech_pad_ms,
+        )
+        changes_turn_detection = (
+            vad_configuration != self.state.vad.configuration
+            or config.turn_detection.enabled != self.state.vad_enabled
+        )
+        if changes_turn_detection and (
+            self.state.speech_start_sample is not None
+            or self.state.input_audio_buffer.size_bytes > 0
+        ):
+            raise ValueError("cannot change VAD settings while input audio is buffered")
+        self.state.vad.configure(
+            threshold=config.turn_detection.threshold,
+            min_speech_ms=config.turn_detection.min_speech_ms,
+            min_speech_continuation_ms=config.turn_detection.min_speech_continuation_ms,
+            min_silence_ms=config.turn_detection.min_silence_ms,
+            speech_pad_ms=config.turn_detection.speech_pad_ms,
+        )
+        self.state.instructions = config.instructions
         self.state.tools = config.tools
         self.state.tool_choice = config.tool_choice
         self._telemetry.tool_schema_bytes.set(
@@ -270,14 +318,6 @@ class VoicePipeline:
         self.state.vad_enabled = config.turn_detection.enabled
         self.state.transcription_enabled = config.input_audio_transcription
         self.state.interrupt_response = config.interrupt_response
-        self.state.vad.configure(
-            threshold=config.turn_detection.threshold,
-            min_speech_ms=config.turn_detection.min_speech_ms,
-            min_speech_continuation_ms=config.turn_detection.min_speech_continuation_ms,
-            min_silence_ms=config.turn_detection.min_silence_ms,
-            speech_pad_ms=config.turn_detection.speech_pad_ms,
-        )
-        self.state.input_audio_buffer.clear()
         await self.state.transport.send(
             SessionUpdatedEvent(
                 event_id=_id("evt"),
@@ -429,41 +469,86 @@ class VoicePipeline:
             await asyncio.gather(self._partial_task, return_exceptions=True)
             self._partial_task = None
         audio = self.state.input_audio_buffer.slice_samples(start_sample, end_sample)
+        self.state.input_audio_buffer.discard_before(end_sample)
+        completed = CompletedTurn(
+            turn_id=turn_id,
+            revision=revision,
+            audio=audio,
+            transcription_enabled=self.state.transcription_enabled,
+            speech_stopped_at=self._speech_stopped_at or time.monotonic(),
+        )
+        self._turns_idle.clear()
+        if self._turn_worker_task is None or self._turn_worker_task.done():
+            self._turn_worker_task = asyncio.create_task(self._run_completed_turns())
+        await self._completed_turns.put(completed)
 
-        def stale() -> bool:
-            return self._draining or self.state.current_turn_revision != revision
+    async def _run_completed_turns(self) -> None:
+        while True:
+            completed = await self._completed_turns.get()
+            try:
+                await self._process_completed_turn(completed)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception(
+                    "completed_turn_failed",
+                    extra={
+                        "session_id": self.state.session_id,
+                        "turn_id": completed.turn_id,
+                        "turn_revision": completed.revision,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                await self.send_error(
+                    ErrorCode.MODEL_FAILURE,
+                    "final transcription failed",
+                )
+                await self.state.transport.close(
+                    code=int(CloseCode.SERVICE_FAILURE),
+                    reason=ErrorCode.MODEL_FAILURE,
+                )
+                return
+            finally:
+                self._completed_turns.task_done()
+                if self._completed_turns.empty():
+                    self._turns_idle.set()
+
+    async def _process_completed_turn(self, completed: CompletedTurn) -> None:
+        def stale_for_scheduler() -> bool:
+            return self._draining
 
         started = time.monotonic()
-        try:
-            transcript = await self._stt.submit_final(
-                STTJob(
-                    session_id=self.state.session_id,
-                    turn_id=turn_id,
-                    turn_revision=revision,
-                    audio=audio,
-                    final=True,
-                    is_stale=stale,
-                )
+        transcript = await self._stt.submit_final(
+            STTJob(
+                session_id=self.state.session_id,
+                turn_id=completed.turn_id,
+                turn_revision=completed.revision,
+                audio=completed.audio,
+                final=True,
+                is_stale=stale_for_scheduler,
             )
-        finally:
-            self.state.input_audio_buffer.discard_before(end_sample)
+        )
         self._telemetry.transcription_delay_seconds.observe(time.monotonic() - started)
         self._telemetry.turns.inc()
-        item_id = self._user_item_id(turn_id)
-        if self.state.transcription_enabled:
+        item_id = self._user_item_id(completed.turn_id)
+        if completed.transcription_enabled:
             await self.state.transport.send(
                 InputTranscriptionCompletedEvent(
                     event_id=_id("evt"),
                     session_id=self.state.session_id,
-                    turn_id=turn_id,
-                    turn_revision=revision,
+                    turn_id=completed.turn_id,
+                    turn_revision=completed.revision,
                     item_id=item_id,
                     transcript=transcript,
                 )
             )
-        if transcript.strip() and not stale():
+        stale_response = self._draining or self.state.current_turn_revision != completed.revision
+        if transcript.strip() and not stale_response:
             self.state.conversation.append(item_id=item_id, role="user", content=transcript)
-            await self._start_response(response_instructions="")
+            await self._start_response(
+                response_instructions="",
+                speech_stopped_at=completed.speech_stopped_at,
+            )
 
     async def _commit_audio(self) -> None:
         if self.state.speech_start_sample is not None:
@@ -626,6 +711,7 @@ class VoicePipeline:
         response_instructions: str,
         tools: Sequence[Any] | None = None,
         tool_choice: Any | None = None,
+        speech_stopped_at: float | None = None,
     ) -> None:
         if self._response is not None:
             raise ValueError("a response is already active for this session")
@@ -670,7 +756,9 @@ class VoicePipeline:
             tools=tuple(self.state.tools if tools is None else tools),
             tool_choice=self.state.tool_choice if tool_choice is None else tool_choice,
             started_at=time.monotonic(),
-            speech_stopped_at=self._speech_stopped_at,
+            speech_stopped_at=(
+                self._speech_stopped_at if speech_stopped_at is None else speech_stopped_at
+            ),
         )
         self._response = context
         self._response_idle.clear()

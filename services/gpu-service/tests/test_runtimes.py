@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -112,6 +112,7 @@ async def test_parakeet_loads_once_uses_local_file_and_runs_off_loop(tmp_path: P
 class FakeQwenModel:
     def __init__(self) -> None:
         self.warmups = 0
+        self.closed_streams = 0
         self.calls: list[dict[str, Any]] = []
 
     def warmup(self, *, prefill_len: int = 100) -> None:
@@ -122,8 +123,11 @@ class FakeQwenModel:
         self, **kwargs: Any
     ) -> Iterator[tuple[np.ndarray[Any, Any], int, dict[str, Any]]]:
         self.calls.append(kwargs)
-        yield np.full(600, 0.5, dtype=np.float32), 24_000, {}
-        yield np.full(100, -0.5, dtype=np.float32), 24_000, {}
+        try:
+            yield np.full(600, 0.5, dtype=np.float32), 24_000, {}
+            yield np.full(100, -0.5, dtype=np.float32), 24_000, {}
+        finally:
+            self.closed_streams += 1
 
 
 @pytest.mark.asyncio
@@ -142,6 +146,7 @@ async def test_qwen_forwards_speech_options_and_emits_exact_pcm_frames(tmp_path:
     runtime.load()
     runtime.warmup()
     assert runtime.load_count == 1
+    assert model.closed_streams == 1
     frames = [
         frame
         async for frame in runtime.stream_pcm16_frames(
@@ -160,6 +165,35 @@ async def test_qwen_forwards_speech_options_and_emits_exact_pcm_frames(tmp_path:
     assert call["top_k"] == 50
     assert call["top_p"] == 1.0
     assert call["repetition_penalty"] == 1.05
+    assert model.closed_streams == 2
+
+
+@pytest.mark.asyncio
+async def test_qwen_closes_native_iterator_when_audio_consumer_stops_early(
+    tmp_path: Path,
+) -> None:
+    talker = tmp_path / "talker.gguf"
+    codec = tmp_path / "codec.gguf"
+    talker.write_bytes(b"talker")
+    codec.write_bytes(b"codec")
+    model = FakeQwenModel()
+    runtime = QwenTTSRuntime(
+        talker,
+        codec,
+        model_factory=lambda talker_path, codec_path: model,
+        cuda_probe=lambda: None,
+    )
+    runtime.load()
+    stream = runtime.stream_pcm16_frames(
+        "Hello.",
+        language="English",
+        instructions="Speak warmly.",
+    )
+
+    assert len(await anext(stream)) == OUTPUT_FRAME_BYTES
+    await cast(AsyncGenerator[bytes, None], stream).aclose()
+
+    assert model.closed_streams == 1
 
 
 @pytest.mark.asyncio

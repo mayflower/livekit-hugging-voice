@@ -87,6 +87,8 @@ class CapturingAudioOutput(AudioOutput):
         )
         self.frames: list[rtc.AudioFrame] = []
         self.first_frame = asyncio.Event()
+        self.playback_finished = asyncio.Event()
+        self.completed_duration = 0.0
         self._segment_duration = 0.0
 
     async def capture_frame(self, frame: rtc.AudioFrame) -> None:
@@ -104,6 +106,8 @@ class CapturingAudioOutput(AudioOutput):
                 playback_position=self._segment_duration,
                 interrupted=False,
             )
+            self.completed_duration += self._segment_duration
+            self.playback_finished.set()
         self._segment_duration = 0.0
 
     def clear_buffer(self) -> None:
@@ -145,19 +149,32 @@ async def test_external_agent_session_builtin_transcription_and_audio() -> None:
 
     try:
         await session.start(
-            agent=Agent(instructions="Antworte kurz, natürlich und ausschließlich auf Deutsch."),
+            agent=Agent(
+                instructions=(
+                    "Antworte natürlich und ausschließlich auf Deutsch in genau zwei "
+                    "kurzen, vollständigen Sätzen."
+                )
+            ),
             record=False,
         )
         for frame in wav_frames(wav_path):
             await asyncio.wait_for(audio_input.push(frame), timeout=5.0)
             await asyncio.sleep(frame.duration)
-        transcript, _ = await asyncio.wait_for(
-            asyncio.gather(final_transcript, audio_output.first_frame.wait()),
+        transcript, _, _ = await asyncio.wait_for(
+            asyncio.gather(
+                final_transcript,
+                audio_output.first_frame.wait(),
+                audio_output.playback_finished.wait(),
+            ),
             timeout=240.0,
         )
         assert transcript.strip()
-        assert audio_output.frames
+        assert len(audio_output.frames) > 50
         assert all(frame.sample_rate == 24_000 for frame in audio_output.frames)
+        assert audio_output.completed_duration == pytest.approx(
+            sum(frame.duration for frame in audio_output.frames)
+        )
+        assert audio_output.completed_duration > 1.0
         assert session.llm is model
         assert session.stt is None
         assert session.tts is None
@@ -208,6 +225,7 @@ async def test_external_agent_session_native_tool_turn_is_silent_until_result() 
             tool_choice="required",
         )
         await asyncio.wait_for(handle, timeout=240.0)
+        await asyncio.wait_for(audio_output.playback_finished.wait(), timeout=240.0)
         assert tool_started.is_set() and tool_finished.is_set() and executed.is_set()
         assert audio_output.frames
         assert all(frame.sample_rate == 24_000 for frame in audio_output.frames)

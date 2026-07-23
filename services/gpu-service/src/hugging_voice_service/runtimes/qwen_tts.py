@@ -53,6 +53,12 @@ def _next_item(iterator: Iterator[Any]) -> tuple[bool, Any | None]:
         return False, None
 
 
+def _close_iterator(iterator: Iterator[Any]) -> None:
+    close = getattr(iterator, "close", None)
+    if callable(close):
+        close()
+
+
 class QwenTTSRuntime:
     model_id = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
     sample_rate = OUTPUT_SAMPLE_RATE
@@ -106,11 +112,14 @@ class QwenTTSRuntime:
             instructions=self._warmup_instructions,
         )
         try:
-            chunk, sample_rate, _timing = next(iterator)
-        except StopIteration as exc:
-            raise RuntimeError("Qwen3-TTS warmup produced no audio") from exc
-        if sample_rate != self.sample_rate or self._to_pcm16(chunk) == b"":
-            raise RuntimeError("Qwen3-TTS warmup produced invalid audio")
+            try:
+                chunk, sample_rate, _timing = next(iterator)
+            except StopIteration as exc:
+                raise RuntimeError("Qwen3-TTS warmup produced no audio") from exc
+            if sample_rate != self.sample_rate or self._to_pcm16(chunk) == b"":
+                raise RuntimeError("Qwen3-TTS warmup produced invalid audio")
+        finally:
+            _close_iterator(iterator)
 
     async def stream_pcm16_frames(
         self,
@@ -128,26 +137,29 @@ class QwenTTSRuntime:
             instructions=instructions,
         )
         remainder = bytearray()
-        while not cancelled():
-            has_item, item = await asyncio.to_thread(_next_item, iterator)
-            if not has_item:
-                break
-            if item is None:
-                raise RuntimeError("Qwen3-TTS returned an empty stream item")
-            chunk, sample_rate, _timing = item
-            if sample_rate != self.sample_rate:
-                raise RuntimeError(
-                    f"Qwen3-TTS returned {sample_rate} Hz; expected {self.sample_rate} Hz"
-                )
-            remainder.extend(self._to_pcm16(chunk))
-            while len(remainder) >= OUTPUT_FRAME_BYTES:
-                if cancelled():
-                    return
-                yield bytes(remainder[:OUTPUT_FRAME_BYTES])
-                del remainder[:OUTPUT_FRAME_BYTES]
-        if remainder and not cancelled():
-            remainder.extend(bytes(OUTPUT_FRAME_BYTES - len(remainder)))
-            yield bytes(remainder)
+        try:
+            while not cancelled():
+                has_item, item = await asyncio.to_thread(_next_item, iterator)
+                if not has_item:
+                    break
+                if item is None:
+                    raise RuntimeError("Qwen3-TTS returned an empty stream item")
+                chunk, sample_rate, _timing = item
+                if sample_rate != self.sample_rate:
+                    raise RuntimeError(
+                        f"Qwen3-TTS returned {sample_rate} Hz; expected {self.sample_rate} Hz"
+                    )
+                remainder.extend(self._to_pcm16(chunk))
+                while len(remainder) >= OUTPUT_FRAME_BYTES:
+                    if cancelled():
+                        return
+                    yield bytes(remainder[:OUTPUT_FRAME_BYTES])
+                    del remainder[:OUTPUT_FRAME_BYTES]
+            if remainder and not cancelled():
+                remainder.extend(bytes(OUTPUT_FRAME_BYTES - len(remainder)))
+                yield bytes(remainder)
+        finally:
+            await asyncio.to_thread(_close_iterator, iterator)
 
     def close(self) -> None:
         self._model = None
