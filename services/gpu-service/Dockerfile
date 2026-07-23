@@ -2,7 +2,7 @@
 
 ARG CUDA_VERSION=12.8.1
 ARG UBUNTU_VERSION=24.04
-ARG PYTHON_VERSION=3.11.13
+ARG PYTHON_VERSION=3.11.15
 
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION}@sha256:3986465b3dd3b4d602c07061f2cff417e0bfb24810129408d4eb12e111015a6c AS llama-builder
 ARG LLAMA_CPP_COMMIT=3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
@@ -32,7 +32,7 @@ RUN git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git \
 
 FROM ubuntu:${UBUNTU_VERSION}@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf AS python-builder
 ARG PYTHON_VERSION
-ARG PYTHON_SOURCE_SHA256=0f1a22f4dfd34595a29cf69ee7ea73b9eff8b1cc89d7ab29b3ab0ec04179dad8
+ARG PYTHON_SOURCE_SHA256=f4de1b10bd6c70cbb9fa1cd71fc5038b832747a74ee59d599c69ce4846defb50
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential ca-certificates curl libbz2-dev libffi-dev liblzma-dev \

@@ -22,6 +22,18 @@ def test_gpu_service_installs_websocket_protocol() -> None:
     assert "websockets==15.0.1" in pyproject["project"]["dependencies"]
 
 
+def test_security_fixed_dependency_versions_are_pinned() -> None:
+    workspace = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    service = tomllib.loads(
+        (REPO_ROOT / "services/gpu-service/pyproject.toml").read_text(encoding="utf-8")
+    )
+    dev_dependencies = workspace["dependency-groups"]["dev"]
+    gpu_dependencies = service["project"]["optional-dependencies"]["gpu"]
+    assert "pytest==9.1.1" in dev_dependencies
+    assert "torch==2.10.0" in gpu_dependencies
+    assert "torchaudio==2.10.0" in gpu_dependencies
+
+
 def test_kubernetes_gpu_and_security_contract() -> None:
     deployment = load_yaml("deploy/kubernetes/base/deployment.yaml")
     pod = deployment["spec"]["template"]["spec"]

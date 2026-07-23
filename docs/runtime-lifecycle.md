@@ -7,7 +7,7 @@
 - `nano-parakeet==0.2.1`
 - `faster-qwen3-tts[ggml]==0.3.2`
 - `qwentts-cpp-python==0.3.1` (resolved by the locked extra)
-- `torch==2.8.0` and `torchaudio==2.8.0` with the CUDA 12.8 lock set
+- `torch==2.10.0` and `torchaudio==2.10.0` with the CUDA 12.8 lock set
 
 CPU development does not install the `gpu` extra. GPU tests are marked `gpu` and
 require `HV_RUN_GPU_TESTS=1`, a real lock, local verified model files, the optional

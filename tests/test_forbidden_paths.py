@@ -19,8 +19,9 @@ def production_python() -> list[Path]:
 
 def test_production_has_no_forbidden_provider_or_runtime_paths() -> None:
     forbidden = re.compile(
-        r"maistack|fastenhancer|deepfilternet|aiortc|webrtc|"
-        r"torch\.hub|from_pretrained|openai.{0,30}realtime|realtime.{0,30}openai|\be4b\b",
+        r"maistack|fastenhancer|deepfilternet|aiortc|webrtc|lightglue|\btrainer\b|"
+        r"torch\.hub|torch\.jit\.script|from_pretrained|openai.{0,30}realtime|"
+        r"realtime.{0,30}openai|\be4b\b",
         re.IGNORECASE,
     )
     findings = [

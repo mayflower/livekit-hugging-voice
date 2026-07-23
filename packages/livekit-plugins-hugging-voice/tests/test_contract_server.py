@@ -1160,7 +1160,7 @@ async def test_generate_reply_future_times_out_and_close_never_leaves_it_hanging
     session = model.session()
     try:
         timed_out = session.generate_reply()
-        with pytest.raises(Exception, match="response.created timed out"):
+        with pytest.raises(Exception, match=r"response\.created timed out"):
             await asyncio.wait_for(timed_out, timeout=1.0)
 
         pending = session.generate_reply()

@@ -94,9 +94,11 @@ class STTScheduler:
     async def wait_session_idle(self, session_id: str) -> None:
         async with self._condition:
             await self._condition.wait_for(
-                lambda: (self._active is None or self._active.session_id != session_id)
-                and not self._final.get(session_id)
-                and not self._partial.get(session_id)
+                lambda: (
+                    (self._active is None or self._active.session_id != session_id)
+                    and not self._final.get(session_id)
+                    and not self._partial.get(session_id)
+                )
             )
 
     async def aclose(self) -> None:

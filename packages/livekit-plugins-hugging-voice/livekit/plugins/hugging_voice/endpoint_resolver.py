@@ -32,7 +32,7 @@ async def _system_dns(host: str, port: int) -> Sequence[str]:
         family=socket.AF_UNSPEC,
         type=socket.SOCK_STREAM,
     )
-    return tuple(dict.fromkeys(record[4][0] for record in records))
+    return tuple(dict.fromkeys(str(record[4][0]) for record in records))
 
 
 class EndpointResolver:
