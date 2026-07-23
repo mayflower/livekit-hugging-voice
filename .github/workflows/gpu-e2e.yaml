@@ -50,7 +50,8 @@ jobs:
       - name: Build and start offline service container
         run: |
           install -m 640 /run/secrets/hugging_voice_token deploy/docker/secrets/token
-          export HUGGING_VOICE_SECRET_GID="$(id -g)"
+          HUGGING_VOICE_SECRET_GID="$(id -g)"
+          export HUGGING_VOICE_SECRET_GID
           docker compose -f deploy/docker/compose.yaml build
           docker compose -f deploy/docker/compose.yaml up -d
           timeout 900 bash -c 'until curl --fail --silent http://127.0.0.1:8765/health/ready >/dev/null; do sleep 5; done'
