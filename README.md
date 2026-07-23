@@ -1,5 +1,13 @@
 # livekit-hugging-voice
 
+[![CPU CI](https://github.com/mayflower/livekit-hugging-voice/actions/workflows/ci.yaml/badge.svg?branch=main&event=push)](https://github.com/mayflower/livekit-hugging-voice/actions/workflows/ci.yaml)
+[![Security](https://github.com/mayflower/livekit-hugging-voice/actions/workflows/security.yaml/badge.svg?branch=main)](https://github.com/mayflower/livekit-hugging-voice/actions/workflows/security.yaml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/mayflower/livekit-hugging-voice/badge)](https://scorecard.dev/viewer/?uri=github.com/mayflower/livekit-hugging-voice)
+[![Real GPU E2E](https://github.com/mayflower/livekit-hugging-voice/actions/workflows/gpu-e2e.yaml/badge.svg)](https://github.com/mayflower/livekit-hugging-voice/actions/workflows/gpu-e2e.yaml)
+[![Dependabot](https://img.shields.io/badge/Dependabot-enabled-025E8C?logo=dependabot)](https://github.com/mayflower/livekit-hugging-voice/security/dependabot)
+[![Security policy](https://img.shields.io/badge/security-policy-2F81F7)](SECURITY.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 `livekit-hugging-voice` is a local, GPU-hosted multilingual speech-to-speech service and
 a native LiveKit Agents realtime-model plugin. The intended path is:
 
@@ -27,6 +35,13 @@ offline CUDA service,
 native LiveKit plugin, bounded two-session pipeline, exact model delivery,
 Docker/Compose, Kustomize, capacity-aware pod discovery, CPU contracts, and
 reproducible GPU/benchmark tooling.
+
+Repository safeguards include GitHub CodeQL, dependency review, OpenSSF Scorecard,
+Dependabot version and security updates, secret scanning with push protection, and
+SHA-pinned Actions. Results are available through the
+[Actions](https://github.com/mayflower/livekit-hugging-voice/actions) and
+[Security](https://github.com/mayflower/livekit-hugging-voice/security) dashboards.
+Vulnerabilities must be reported privately according to [`SECURITY.md`](SECURITY.md).
 
 A local RTX A6000 smoke test has verified model hashing, full GPU warmup, LiveKit
 worker registration, built-in transcription, and a 24 kHz audio response through a
