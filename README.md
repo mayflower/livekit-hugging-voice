@@ -22,24 +22,21 @@ LiveKit Agent
   -> 24 kHz PCM16 audio in the configured language and voice
 ```
 
-The service is deliberately not a generic model platform. A GPU pod admits a
-bounded operator-configured number of isolated sessions while loading Parakeet,
-Gemma, and Qwen exactly once. The safe default remains two sessions.
-Language codes and public voice profiles are configured by the operator and selected
-per session. The shipped catalog exposes German, English, French, and Italian plus
-five fixed voice profiles; `de` and `warm_female` are the defaults. By default the
-profiles are spoken by the Qwen3-TTS base talker from frozen, operator-defined
-reference recordings (`speech.tts_mode: voice_clone`), which keeps each speaker
-identity stable across segments and sessions; `voice_design` mode rebuilds the
-voice from its description instead.
+Each GPU pod loads Parakeet, Gemma, and Qwen once. Session capacity is
+operator-configurable; the default is two for compatibility. This default is not
+a performance guarantee.
+
+The shipped catalog provides German, English, French, and Italian plus five fixed
+voice profiles. `de` and `warm_female` are the defaults. The default
+`voice_clone` mode uses frozen operator-provided reference recordings;
+`voice_design` creates the voice from its configured description.
 
 ## Status
 
-Version 0.2.0 is implemented locally: strict protocol, native LiveKit tool calling,
-offline CUDA service,
-native LiveKit plugin, bounded configurable-session pipeline, exact model delivery,
-Docker/Compose, Kustomize, capacity-aware pod discovery, CPU contracts, and
-reproducible GPU/benchmark tooling.
+Version 0.2.0 includes the native LiveKit plugin and tool calling, the offline CUDA
+service, configurable bounded sessions, exact model delivery, Docker Compose,
+Kustomize, capacity-aware pod discovery, CPU contracts, and reproducible GPU
+benchmark tooling.
 
 Repository safeguards include GitHub CodeQL, dependency review, OpenSSF Scorecard,
 Dependabot version and security updates, secret scanning with push protection, and

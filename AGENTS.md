@@ -64,9 +64,11 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
   Qwen runtime. Concurrent sessions must never be implemented as complete model
   pipelines. Per-session stateful Silero VAD instances are allowed.
 - Connected-session admission, llama.cpp sequence slots, and total llama.cpp
-  context are bounded operator configuration with safe defaults of two sessions,
-  two slots, and 32768 tokens. `max_sessions` must not exceed the sequence-slot
-  count, and the total context must provide at least 2048 tokens per slot.
+  context are bounded operator configuration with compatibility defaults of two
+  sessions, two slots, and 32768 tokens. These defaults are not a measured
+  throughput or stability recommendation. `max_sessions` must not exceed the
+  sequence-slot count, and the total context must provide at least 2048 tokens per
+  slot.
 - A connection beyond the configured session limit is rejected immediately and
   explicitly; there is no user queue.
 - Conversation, VAD state, audio remainder, turn/revision, cancellation, IDs, and

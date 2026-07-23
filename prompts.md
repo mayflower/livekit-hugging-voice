@@ -34,8 +34,8 @@ Pack, die Sessions oder llama.cpp-Sequenz-Slots fest auf zwei begrenzen:
 
 - `server.max_sessions`, `models.llama_parallel_slots` und
   `models.llama_context_size` sind begrenzte Betreiberkonfiguration.
-- Die sicheren Defaults bleiben zwei Sessions, zwei Slots und 32768 Tokens
-  Gesamtkontext.
+- Die Kompatibilitätsdefaults bleiben zwei Sessions, zwei Slots und 32768 Tokens
+  Gesamtkontext; daraus folgt keine gemessene Durchsatz- oder Stabilitätsaussage.
 - `max_sessions` darf die Anzahl der llama.cpp-Slots nicht überschreiten; der
   Gesamtkontext muss mindestens 2048 Tokens je Slot bereitstellen.
 - Eine Verbindung oberhalb des konfigurierten Sessionlimits wird weiterhin sofort
