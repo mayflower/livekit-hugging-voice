@@ -47,16 +47,39 @@ def test_voice_style_is_scoped_without_replacing_the_fixed_identity() -> None:
 
 
 def test_environment_overrides_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HV_SERVER__MAX_SESSIONS", "1")
+    monkeypatch.setenv("HV_SERVER__MAX_SESSIONS", "8")
+    monkeypatch.setenv("HV_MODELS__LLAMA_PARALLEL_SLOTS", "8")
+    monkeypatch.setenv("HV_MODELS__LLAMA_CONTEXT_SIZE", "65536")
     monkeypatch.setenv("HV_SERVER__PORT", "9000")
     settings = load_settings(DEFAULT_CONFIG)
-    assert settings.server.max_sessions == 1
+    assert settings.server.max_sessions == 8
+    assert settings.models.llama_parallel_slots == 8
+    assert settings.models.llama_context_size == 65_536
     assert settings.server.port == 9000
 
 
-def test_capacity_and_unknown_backend_are_rejected() -> None:
-    with pytest.raises(ValidationError):
+def test_capacity_is_bounded_and_matches_llama_slots() -> None:
+    configured = ServiceSettings(
+        server={"max_sessions": 20},  # type: ignore[arg-type]
+        models={"llama_parallel_slots": 20, "llama_context_size": 65_536},  # type: ignore[arg-type]
+    )
+    assert configured.server.max_sessions == 20
+    assert configured.models.llama_parallel_slots == 20
+
+    with pytest.raises(ValidationError, match="cannot exceed"):
         ServiceSettings(server={"max_sessions": 3})  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        ServiceSettings(
+            server={"max_sessions": 65},  # type: ignore[arg-type]
+            models={"llama_parallel_slots": 64, "llama_context_size": 131_072},  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError, match="at least 2048 tokens"):
+        ServiceSettings(
+            models={"llama_parallel_slots": 20, "llama_context_size": 32_768}  # type: ignore[arg-type]
+        )
+
+
+def test_unknown_backend_is_rejected() -> None:
     with pytest.raises(ValidationError):
         ServiceSettings(backend="cloud")  # type: ignore[call-arg]
 

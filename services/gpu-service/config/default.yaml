@@ -1,6 +1,7 @@
 server:
   host: 0.0.0.0
   port: 8765
+  # Bounded operator capacity. This must not exceed llama_parallel_slots.
   max_sessions: 2
   token_file: /run/secrets/hugging_voice_token
   inbound_queue_size: 128
@@ -13,6 +14,7 @@ models:
   llama_server_binary: /usr/local/bin/llama-server
   llama_cpp_commit: 3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
   llama_port: 8081
+  # llama_context_size is total context divided across all parallel slots.
   llama_context_size: 32768
   llama_parallel_slots: 2
   llama_startup_timeout_seconds: 600.0

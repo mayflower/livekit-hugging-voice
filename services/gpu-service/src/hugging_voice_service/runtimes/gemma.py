@@ -237,17 +237,21 @@ class GemmaRuntime:
         self,
         *,
         port: int,
+        parallel_slots: int = 2,
         session: aiohttp.ClientSession | None = None,
         request_timeout: float = 120.0,
         idle_timeout: float = 30.0,
         reasoning_violation: Callable[[], None] | None = None,
     ) -> None:
+        if not 1 <= parallel_slots <= 64:
+            raise ValueError("parallel_slots must be between 1 and 64")
         self._base_url = f"http://127.0.0.1:{port}"
         self._session = session
         self._owns_session = session is None
         self._request_timeout = request_timeout
         self._idle_timeout = idle_timeout
-        self._semaphore = asyncio.Semaphore(2)
+        self._parallel_slots = parallel_slots
+        self._semaphore = asyncio.Semaphore(parallel_slots)
         self._reasoning_violation = reasoning_violation
         self.reasoning_violations = 0
 
@@ -273,8 +277,8 @@ class GemmaRuntime:
         tool_choice: ToolChoice = "auto",
         slot_id: int = 0,
     ) -> AsyncIterator[TextDelta | ToolCall | TextUsage]:
-        if slot_id not in {0, 1}:
-            raise ValueError("Gemma slot_id must be 0 or 1")
+        if not 0 <= slot_id < self._parallel_slots:
+            raise ValueError(f"Gemma slot_id must be between 0 and {self._parallel_slots - 1}")
         if isinstance(tool_choice, NamedToolChoice):
             named = tool_choice.function.name
             if named not in {tool.function.name for tool in tools}:

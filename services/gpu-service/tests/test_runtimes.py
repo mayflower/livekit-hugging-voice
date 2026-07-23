@@ -434,7 +434,7 @@ async def test_gemma_aggregates_one_structured_tool_call_with_slot_cache() -> No
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     sockets = site._server.sockets  # type: ignore[union-attr]
-    runtime = GemmaRuntime(port=sockets[0].getsockname()[1])
+    runtime = GemmaRuntime(port=sockets[0].getsockname()[1], parallel_slots=4)
     tool = FunctionTool(
         function=FunctionDefinition(
             name="add_numbers",
@@ -449,14 +449,14 @@ async def test_gemma_aggregates_one_structured_tool_call_with_slot_cache() -> No
                 messages=[GemmaMessage(role="user", content="Addiere 19 und 23")],
                 tools=[tool],
                 tool_choice="required",
-                slot_id=1,
+                slot_id=3,
             )
         ]
         calls = [event for event in events if isinstance(event, ToolCall)]
         assert calls == [
             ToolCall(call_id="call_add", name="add_numbers", arguments='{"a":19,"b":23}')
         ]
-        assert requests[0]["id_slot"] == 1
+        assert requests[0]["id_slot"] == 3
         assert requests[0]["cache_prompt"] is True
         assert requests[0]["parallel_tool_calls"] is False
         assert requests[0]["temperature"] == 0.2

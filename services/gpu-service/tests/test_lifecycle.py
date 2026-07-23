@@ -188,7 +188,7 @@ async def test_lifecycle_loads_each_runtime_once_and_reports_real_readiness(
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: parakeet,
         qwen_factory=lambda talker, codec, speech: qwen,
-        gemma_factory=lambda port, violation: gemma,
+        gemma_factory=lambda port, slots, violation: gemma,
         gpu_memory_probe=lambda: 123_456,
     )
     await lifecycle.start()
@@ -300,7 +300,7 @@ async def test_warmup_failure_cleans_started_resources_and_stays_unready(
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: parakeet,
         qwen_factory=lambda talker, codec, speech: qwen,
-        gemma_factory=lambda port, violation: FakeGemma(),
+        gemma_factory=lambda port, slots, violation: FakeGemma(),
     )
     await lifecycle.start()
     assert lifecycle.phase is LifecyclePhase.FAILED
@@ -348,7 +348,7 @@ async def test_unexpected_llama_exit_immediately_revokes_readiness(
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: FakeBlockingRuntime(),
         qwen_factory=lambda talker, codec, speech: FakeBlockingRuntime(),
-        gemma_factory=lambda port, violation: FakeGemma(),
+        gemma_factory=lambda port, slots, violation: FakeGemma(),
     )
     await lifecycle.start()
     assert lifecycle.phase.value == LifecyclePhase.READY.value
@@ -427,7 +427,7 @@ async def test_talker_artifact_follows_the_configured_tts_mode(
             llama_factory=lambda binary, model, config: FakeLlama(),
             parakeet_factory=lambda checkpoint: FakeBlockingRuntime(),
             qwen_factory=qwen_factory,
-            gemma_factory=lambda port, violation: FakeGemma(),
+            gemma_factory=lambda port, slots, violation: FakeGemma(),
             gpu_memory_probe=lambda: 0,
         )
         await lifecycle.start()

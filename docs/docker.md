@@ -157,6 +157,18 @@ include the bearer header, audio bytes, full prompts, or complete transcripts.
 
 ## Measure, do not estimate
 
+Compose exposes bounded capacity through:
+
+```bash
+export HUGGING_VOICE_MAX_SESSIONS=4
+export HUGGING_VOICE_LLAMA_PARALLEL_SLOTS=4
+export HUGGING_VOICE_LLAMA_CONTEXT_SIZE=65536
+```
+
+The slot count must be at least the session count. `llama_context_size` is total
+context across all slots, not context per session. Validate higher values against
+real VRAM and latency before production use.
+
 Record real GPU memory through warmup and two sessions:
 
 ```bash

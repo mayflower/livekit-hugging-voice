@@ -60,11 +60,15 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
 - A GPU pod has one Python service controlling one loopback-only `llama-server`
   child process.
 - A service lifecycle loads exactly one Parakeet runtime, one Gemma runtime (one
-  llama-server with two sequence slots), and one Qwen runtime. Two concurrent
-  sessions must never be implemented as two complete model pipelines. Per-session
-  stateful Silero VAD instances are allowed.
-- At most two connected sessions are admitted. A third is rejected immediately
-  and explicitly; there is no user queue.
+  llama-server with a bounded operator-configured sequence-slot count), and one
+  Qwen runtime. Concurrent sessions must never be implemented as complete model
+  pipelines. Per-session stateful Silero VAD instances are allowed.
+- Connected-session admission, llama.cpp sequence slots, and total llama.cpp
+  context are bounded operator configuration with safe defaults of two sessions,
+  two slots, and 32768 tokens. `max_sessions` must not exceed the sequence-slot
+  count, and the total context must provide at least 2048 tokens per slot.
+- A connection beyond the configured session limit is rejected immediately and
+  explicitly; there is no user queue.
 - Conversation, VAD state, audio remainder, turn/revision, cancellation, IDs, and
   output channels are isolated per session and remain ephemeral. Session tools,
   tool choice, pending calls, call/result correlations, and tool timing state are

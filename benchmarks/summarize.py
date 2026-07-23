@@ -200,7 +200,7 @@ def summarize_records(records: list[dict[str, Any]], source: Path) -> dict[str, 
                 ):
                     observations[name].append(float(value))
                     concurrency = record.get("session_concurrency", default_concurrency)
-                    if isinstance(concurrency, int) and concurrency in {1, 2}:
+                    if isinstance(concurrency, int) and 1 <= concurrency <= 64:
                         observations_by_concurrency[concurrency][name].append(float(value))
         elif kind == "error":
             errors.append(record)

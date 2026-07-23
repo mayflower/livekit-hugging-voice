@@ -10,9 +10,9 @@ hop.
 One GPU-service pod contains one Python ASGI process and one loopback-bound
 `llama-server` child managed by that Python process. The pod loads one shared
 Parakeet runtime, one shared Qwen runtime, and one Gemma 4 31B model in llama.cpp
-with two sequence slots. Each of the at most two admitted sessions owns its VAD,
-audio remainder, conversation, IDs, cancellation generation, lifecycle, and
-transport.
+with a bounded operator-configured number of sequence slots. Each admitted session
+owns its VAD, audio remainder, conversation, IDs, cancellation generation,
+lifecycle, transport, and one stable llama.cpp slot.
 
 The concrete startup lifecycle is deliberately ordered: verify every local byte
 and the pinned Silero package offline, require CUDA, start the exact llama.cpp
@@ -32,7 +32,8 @@ a defensive streaming filter quarantines a leading thinking block rather than
 exposing it to later TTS stages.
 
 Shared STT and TTS runtimes are protected by small bounded fair schedulers. Gemma
-allows two text generations while keeping request and cancellation state isolated.
+allows the configured number of text generations while keeping request and
+cancellation state isolated.
 Every output is generation-tagged so cancellation can discard stale text and audio
 without suppressing a subsequent response.
 
@@ -63,6 +64,17 @@ slot to `idle`.
   profile and all reference recordings remain operator-controlled.
 - The shipped defaults are `de` and `warm_female`; four languages and five profiles
   are allowlisted.
+
+## Configurable capacity
+
+- `server.max_sessions` controls atomic WebSocket admission from 1 through 64.
+- `models.llama_parallel_slots` controls the matching llama.cpp sequence-slot pool
+  from 1 through 64 and must be at least `max_sessions`.
+- `models.llama_context_size` is llama.cpp's total context across all slots. It must
+  provide at least 2048 tokens per slot; operators should size it from workload and
+  measured VRAM rather than treating that minimum as a quality target.
+- Defaults remain two sessions, two slots, and 32768 total context tokens. A client
+  beyond the configured limit is rejected immediately; there is no user queue.
 
 ## Fixed decisions
 

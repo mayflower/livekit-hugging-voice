@@ -9,8 +9,8 @@ scheduler wait/inference durations, LLM/TTS first-output latency, stale chunks,
 WebSocket failures, and GPU memory.
 
 The runtime load counter for Gemma, Parakeet, and Qwen must remain exactly one per
-pod lifecycle. Two sessions share those runtimes but own separate VAD, audio,
-conversation, cancellation, ID, and output state.
+pod lifecycle. All admitted sessions share those runtimes but own separate VAD,
+audio, conversation, cancellation, ID, output state, and llama.cpp slot.
 
 ## Drain and shutdown
 
@@ -29,6 +29,12 @@ and restart the entire pod so all GPU runtime state is reconstructed safely.
 Scale replicas only to available GPUs. The headless service exposes ready pods;
 the plugin’s capacity probe reduces avoidable 4429 races, while admission remains
 authoritative. Existing WebSockets remain on their original pod.
+
+Per-pod capacity defaults to two and is controlled by `server.max_sessions`,
+`models.llama_parallel_slots`, and `models.llama_context_size`. Session admission
+must not exceed the slot count, and total context must provide at least 2048 tokens
+per slot. Increasing these limits without measured VRAM and latency evidence can
+cause startup failure, OOM, or unacceptable realtime latency.
 
 An unexpected llama-server exit, missing model/hash, missing token, CUDA failure,
 or failed warmup makes readiness red. There is no CPU/cloud fallback. Conversation

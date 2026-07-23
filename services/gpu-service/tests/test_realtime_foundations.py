@@ -176,6 +176,22 @@ async def test_capacity_has_no_wait_queue_and_draining_or_stuck_slots_stay_occup
 
 
 @pytest.mark.asyncio
+async def test_capacity_supports_configured_session_count() -> None:
+    capacity = CapacityManager(20, telemetry=ServiceTelemetry())
+    slots = [await capacity.claim(f"session_{index}") for index in range(20)]
+    assert all(slot is not None for slot in slots)
+    assert {slot.index for slot in slots if slot is not None} == set(range(20))
+    assert await capacity.claim("session_overflow") is None
+    assert (await capacity.report()) == {
+        "total": 20,
+        "active": 20,
+        "draining": 0,
+        "stuck": 0,
+        "available": 0,
+    }
+
+
+@pytest.mark.asyncio
 async def test_service_drain_atomically_revokes_all_future_admission() -> None:
     capacity = CapacityManager(1, telemetry=ServiceTelemetry())
     await capacity.begin_service_drain()

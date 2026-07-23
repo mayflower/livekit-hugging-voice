@@ -9,7 +9,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
-from typing import Literal, cast
+from typing import cast
 
 from fastapi import WebSocket
 from hugging_voice_protocol.audio import MAX_AUDIO_BASE64_CHARS
@@ -533,7 +533,7 @@ class RealtimeService:
             supported_languages=tuple(sorted(self.settings.speech.languages)),
             supported_voices=tuple(sorted(self.settings.speech.voices)),
             tts_mode=self.settings.speech.tts_mode,
-            llama_slot_id=cast("Literal[0, 1]", slot_id),
+            llama_slot_id=slot_id,
         )
 
     def _authenticated(self, websocket: WebSocket) -> bool:

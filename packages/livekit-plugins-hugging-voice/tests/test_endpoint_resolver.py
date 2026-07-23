@@ -65,6 +65,23 @@ async def test_capacity_orders_available_by_load_and_leaves_full_last(
 
 
 @pytest.mark.asyncio
+async def test_capacity_accepts_operator_configured_pool_size(
+    unused_tcp_port: int,
+) -> None:
+    server = CapacityHTTPServer(
+        unused_tcp_port,
+        {"total": 20, "active": 7, "available": 13},
+    )
+    await server.start()
+    resolver = EndpointResolver(static_urls=[server.websocket_url])
+    try:
+        async with aiohttp.ClientSession() as session:
+            assert await resolver.resolve(session, token="secret") == (server.websocket_url,)
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
 async def test_malformed_capacity_is_bounded_unknown_not_a_false_available_claim(
     unused_tcp_port_factory: Callable[[], int],
 ) -> None:

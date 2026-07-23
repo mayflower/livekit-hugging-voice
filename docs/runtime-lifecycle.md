@@ -28,9 +28,10 @@ python services/gpu-service/scripts/build_llama_cpp.py \
 
 The helper verifies `git rev-parse HEAD` and configures CUDA, a static release
 build, server-only target, no curl model fetcher, and no tests/examples. Runtime
-arguments bind `127.0.0.1`, load the local Gemma Q4_0 path, allocate exactly two
-slots and 32,768 total context, offload all possible layers, disable the Web UI,
-and extract any reasoning separately.
+arguments bind `127.0.0.1`, load the local Gemma Q4_0 path, allocate the configured
+bounded slot count and total context, offload all possible layers, disable the Web
+UI, and extract any reasoning separately. Defaults remain two slots and 32,768
+total context tokens.
 
 The process manager forwards child output through structured Python logging,
 polls `/health`, submits a real chat-completion probe with thinking disabled,

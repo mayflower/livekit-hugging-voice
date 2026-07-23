@@ -353,7 +353,7 @@ class SessionCreatedEvent(EventBase):
     # recordings; per-session voice-style instructions apply only in
     # voice_design. Clients cannot influence or submit recordings.
     tts_mode: Literal["voice_clone", "voice_design"] = "voice_clone"
-    llama_slot_id: Literal[0, 1] = 0
+    llama_slot_id: int = Field(default=0, ge=0, le=63)
 
 
 class SessionUpdatedEvent(EventBase):

@@ -34,8 +34,8 @@ class CapacityManager:
         *,
         telemetry: ServiceTelemetry,
     ) -> None:
-        if max_sessions not in {1, 2}:
-            raise ValueError("capacity must contain one or two session slots")
+        if not 1 <= max_sessions <= 64:
+            raise ValueError("capacity must contain between 1 and 64 session slots")
         self._slots = [SessionSlot(index=index) for index in range(max_sessions)]
         self._lock = asyncio.Lock()
         self._draining = False

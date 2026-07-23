@@ -156,6 +156,15 @@ def test_compose_mounts_model_root_and_generated_lock_read_only() -> None:
     )
     assert mounts[lock_target]["read_only"] is True
     assert service["environment"]["HV_MODELS__LOCK_FILE"] == lock_target
+    assert service["environment"]["HV_SERVER__MAX_SESSIONS"] == "${HUGGING_VOICE_MAX_SESSIONS:-2}"
+    assert (
+        service["environment"]["HV_MODELS__LLAMA_PARALLEL_SLOTS"]
+        == "${HUGGING_VOICE_LLAMA_PARALLEL_SLOTS:-2}"
+    )
+    assert (
+        service["environment"]["HV_MODELS__LLAMA_CONTEXT_SIZE"]
+        == "${HUGGING_VOICE_LLAMA_CONTEXT_SIZE:-32768}"
+    )
     assert "/tmp:rw,noexec,nosuid,size=4g,uid=10001,gid=10001" in service["tmpfs"]
 
 

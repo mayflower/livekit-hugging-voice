@@ -19,7 +19,7 @@ class StrictConfig(BaseModel):
 class ServerSettings(StrictConfig):
     host: str = "0.0.0.0"
     port: int = Field(default=8765, ge=1, le=65_535)
-    max_sessions: int = Field(default=2, ge=1, le=2)
+    max_sessions: int = Field(default=2, ge=1, le=64)
     token_file: Path = Path("/run/secrets/hugging_voice_token")
     inbound_queue_size: int = Field(default=128, ge=8, le=1_024)
     outbound_queue_size: int = Field(default=256, ge=8, le=2_048)
@@ -34,8 +34,9 @@ class ModelSettings(StrictConfig):
         "3ce7da2c852c538c4c5f9806da27029cf8c9cc4a"
     )
     llama_port: int = Field(default=8081, ge=1, le=65_535)
-    llama_context_size: Literal[32_768] = 32_768
-    llama_parallel_slots: Literal[2] = 2
+    # llama.cpp divides this total context across all parallel sequence slots.
+    llama_context_size: int = Field(default=32_768, ge=2_048, le=1_048_576)
+    llama_parallel_slots: int = Field(default=2, ge=1, le=64)
     llama_startup_timeout_seconds: float = Field(default=600.0, ge=10.0, le=1_800.0)
     llama_shutdown_timeout_seconds: float = Field(default=15.0, ge=1.0, le=120.0)
 
@@ -348,6 +349,18 @@ class ServiceSettings(BaseSettings):
     audio: AudioSettings = Field(default_factory=AudioSettings)
     vad: VADSettings = Field(default_factory=VADSettings)
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
+
+    @model_validator(mode="after")
+    def validate_capacity(self) -> ServiceSettings:
+        if self.server.max_sessions > self.models.llama_parallel_slots:
+            raise ValueError("server.max_sessions cannot exceed models.llama_parallel_slots")
+        minimum_context = self.models.llama_parallel_slots * 2_048
+        if self.models.llama_context_size < minimum_context:
+            raise ValueError(
+                "models.llama_context_size must provide at least 2048 tokens per "
+                "llama_parallel_slot"
+            )
+        return self
 
     @classmethod
     def settings_customise_sources(

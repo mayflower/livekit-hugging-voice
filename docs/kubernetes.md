@@ -39,8 +39,10 @@ kubectl kustomize deploy/kubernetes/overlays/demo
 kubectl apply -k deploy/kubernetes/overlays/demo
 ```
 
-The demo is one `Recreate` pod and at most two sessions. It has no PDB or HPA.
-The base ConfigMap's `speech` section defines the public language and voice IDs,
+The demo is one `Recreate` pod with a default capacity of two sessions. It has no
+PDB or HPA. The base ConfigMap's `server.max_sessions`,
+`models.llama_parallel_slots`, and `models.llama_context_size` values control
+per-pod capacity. The ConfigMap's `speech` section defines the public language and voice IDs,
 their Qwen mappings, the response-language instructions, and default speaking
 styles. Update that ConfigMap and roll the pod to change the deployment catalog.
 
@@ -55,8 +57,10 @@ kustomize edit set replicas hugging-voice=3
 kubectl apply -k .
 ```
 
-Each pod still owns one GPU and admits at most two sessions. There is no CPU HPA,
-database, Redis, operator, or cross-pod session migration. Keep `Recreate` unless
+Each pod still owns one GPU and admits its configured bounded session count. Raise
+that count only together with sufficient llama.cpp slots, total context, measured
+VRAM, and latency validation. There is no CPU HPA, database, Redis, operator, or
+cross-pod session migration. Keep `Recreate` unless
 a rollout is proven to have spare GPU capacity; changing rollout strategy is an
 operator decision, not an overlay default.
 

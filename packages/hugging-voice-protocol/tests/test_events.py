@@ -51,6 +51,17 @@ def load_client(name: str) -> dict[str, object]:
     return cast(dict[str, object], json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8")))
 
 
+def load_server(name: str) -> dict[str, object]:
+    return cast(dict[str, object], json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8")))
+
+
+def test_session_created_accepts_configured_llama_slot() -> None:
+    payload = load_server("server_session_created.json")
+    payload["llama_slot_id"] = 19
+    event = SERVER_EVENT_ADAPTER.validate_python(payload)
+    assert event.llama_slot_id == 19  # type: ignore[union-attr]
+
+
 @pytest.mark.parametrize(
     ("path", "value"),
     [

@@ -48,8 +48,8 @@ stereo, unsupported-rate, and oversized audio is invalid.
 
 - `session.created` reports fixed model IDs, exact local revisions, configured
   default language/voice, supported language/voice IDs, sample rates, and the
-  active `tts_mode` (voice-style instructions are honored only in
-  `voice_design`).
+  active `tts_mode` plus the session's bounded operator-configured llama.cpp slot
+  (voice-style instructions are honored only in `voice_design`).
 - `session.updated` acknowledges the exact `session.update` source event.
 - `conversation.item.created` acknowledges durable in-session context acceptance.
 - `error` contains a bounded structured code/message, retryability, and optional
@@ -81,7 +81,7 @@ Pydantic models use `extra="forbid"`.
 | 4400 | protocol/configuration error |
 | 4401 | missing or invalid bearer token |
 | 4409 | session state conflict |
-| 4429 | both session slots occupied |
+| 4429 | all configured session slots occupied |
 | 4500 | model/service failure |
 | 1012 | service draining or restarting |
 

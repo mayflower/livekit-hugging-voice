@@ -18,11 +18,13 @@ capabilities, and has a read-only root filesystem plus bounded writable scratch
 mounts. There is no cloud fallback, runtime downloader, database, broker, tool
 execution, browser transport, or persisted conversation state.
 
-Admission is limited atomically to two sessions. Each connection owns its VAD,
-conversation, IDs, cancellation generation, and bounded channels; expensive model
-runtimes are shared. Capacity discovery is advisory and leaks no user data. Treat a
-quarantined slot or unexpected llama-server exit as an incident: readiness is revoked,
-new work is refused, and the pod must be drained and replaced after evidence capture.
+Admission is limited atomically to the bounded operator-configured session count
+(default two). Each connection owns its VAD, conversation, IDs, cancellation
+generation, bounded channels, and stable llama.cpp slot; expensive model runtimes
+are shared. Capacity discovery is advisory and leaks no user data. Treat a
+quarantined slot or unexpected llama-server exit as an incident: readiness is
+revoked, new work is refused, and the pod must be drained and replaced after
+evidence capture.
 
 Rotate the bearer token by creating a new Secret and restarting the pod. The process
 reads the token once during startup so a half-rotated pod cannot silently accept two

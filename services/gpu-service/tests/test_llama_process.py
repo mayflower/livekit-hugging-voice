@@ -93,9 +93,25 @@ def test_llama_command_is_loopback_local_file_two_slots_and_no_hub(tmp_path: Pat
     assert command[command.index("--reasoning-format") + 1] == "deepseek"
 
 
-def test_llama_rejects_any_slot_count_other_than_two(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="exactly two"):
-        LlamaProcess(binary=tmp_path / "server", model=tmp_path / "model", parallel_slots=1)
+def test_llama_accepts_configured_slots_and_rejects_unsafe_capacity(tmp_path: Path) -> None:
+    process = LlamaProcess(
+        binary=tmp_path / "server",
+        model=tmp_path / "model",
+        parallel_slots=20,
+        context_size=65_536,
+    )
+    assert process.command[process.command.index("--parallel") + 1] == "20"
+    assert process.command[process.command.index("--ctx-size") + 1] == "65536"
+
+    with pytest.raises(ValueError, match="between 1 and 64"):
+        LlamaProcess(binary=tmp_path / "server", model=tmp_path / "model", parallel_slots=0)
+    with pytest.raises(ValueError, match="at least 2048 tokens"):
+        LlamaProcess(
+            binary=tmp_path / "server",
+            model=tmp_path / "model",
+            parallel_slots=20,
+            context_size=32_768,
+        )
 
 
 @pytest.mark.asyncio

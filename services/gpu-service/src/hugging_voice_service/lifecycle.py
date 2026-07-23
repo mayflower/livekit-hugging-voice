@@ -107,7 +107,7 @@ class ManagedGemma(Protocol):
 LlamaFactory = Callable[[Path, Path, ServiceSettings], ManagedLlama]
 ParakeetFactory = Callable[[Path], ManagedParakeet]
 QwenFactory = Callable[[Path, Path, SpeechSettings], ManagedQwen]
-GemmaFactory = Callable[[int, Callable[[], None]], ManagedGemma]
+GemmaFactory = Callable[[int, int, Callable[[], None]], ManagedGemma]
 CudaProbe = Callable[[], None]
 GpuMemoryProbe = Callable[[], int]
 
@@ -140,8 +140,16 @@ def _llama_factory(binary: Path, model: Path, settings: ServiceSettings) -> Llam
     )
 
 
-def _gemma_factory(port: int, violation: Callable[[], None]) -> GemmaRuntime:
-    return GemmaRuntime(port=port, reasoning_violation=violation)
+def _gemma_factory(
+    port: int,
+    parallel_slots: int,
+    violation: Callable[[], None],
+) -> GemmaRuntime:
+    return GemmaRuntime(
+        port=port,
+        parallel_slots=parallel_slots,
+        reasoning_violation=violation,
+    )
 
 
 def _qwen_factory(talker: Path, codec: Path, speech: SpeechSettings) -> QwenTTSRuntime:
@@ -273,6 +281,7 @@ class ServiceLifecycle:
                 self.phase = LifecyclePhase.WARMING_GEMMA
                 self.gemma = self._gemma_factory(
                     self.settings.models.llama_port,
+                    self.settings.models.llama_parallel_slots,
                     self.telemetry.reasoning_violations.inc,
                 )
                 await self.gemma.warmup()

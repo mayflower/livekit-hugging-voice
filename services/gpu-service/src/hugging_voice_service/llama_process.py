@@ -45,8 +45,10 @@ class LlamaProcess:
         startup_timeout: float = 600.0,
         shutdown_timeout: float = 15.0,
     ) -> None:
-        if parallel_slots != 2:
-            raise ValueError("Gemma requires exactly two llama.cpp sequence slots")
+        if not 1 <= parallel_slots <= 64:
+            raise ValueError("parallel_slots must be between 1 and 64")
+        if context_size < parallel_slots * 2_048:
+            raise ValueError("context_size must provide at least 2048 tokens per slot")
         self.binary = binary
         self.model = model
         self.port = port

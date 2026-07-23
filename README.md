@@ -22,8 +22,9 @@ LiveKit Agent
   -> 24 kHz PCM16 audio in the configured language and voice
 ```
 
-The service is deliberately not a generic model platform. A GPU pod will admit at
-most two isolated sessions while loading Parakeet, Gemma, and Qwen exactly once.
+The service is deliberately not a generic model platform. A GPU pod admits a
+bounded operator-configured number of isolated sessions while loading Parakeet,
+Gemma, and Qwen exactly once. The safe default remains two sessions.
 Language codes and public voice profiles are configured by the operator and selected
 per session. The shipped catalog exposes German, English, French, and Italian plus
 five fixed voice profiles; `de` and `warm_female` are the defaults. By default the
@@ -36,7 +37,7 @@ voice from its description instead.
 
 Version 0.2.0 is implemented locally: strict protocol, native LiveKit tool calling,
 offline CUDA service,
-native LiveKit plugin, bounded two-session pipeline, exact model delivery,
+native LiveKit plugin, bounded configurable-session pipeline, exact model delivery,
 Docker/Compose, Kustomize, capacity-aware pod discovery, CPU contracts, and
 reproducible GPU/benchmark tooling.
 

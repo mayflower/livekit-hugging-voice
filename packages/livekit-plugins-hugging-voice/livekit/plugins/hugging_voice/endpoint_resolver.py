@@ -165,7 +165,7 @@ class EndpointResolver:
             available = int(payload["available"])
         except (KeyError, TypeError, ValueError) as exc:
             raise ConnectionError("capacity endpoint returned an invalid payload") from exc
-        if total not in {1, 2} or min(active, available) < 0 or active + available > total:
+        if not 1 <= total <= 64 or min(active, available) < 0 or active + available > total:
             raise ConnectionError("capacity endpoint returned impossible values")
         return CapacitySnapshot(
             url=endpoint,
