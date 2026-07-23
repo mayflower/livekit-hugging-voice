@@ -6,8 +6,10 @@ commit and allowlists every required file. It currently selects
 `gemma-4-31B-it-Q4_0.gguf` from the 31B repository—not E4B—and records Silero as the
 pinned `silero-vad==6.2.1` package. Parakeet is delivered as the exact `.nemo`
 checkpoint consumed by the local `nano-parakeet` loader. Qwen uses exact BF16
-talker and 12 Hz codec GGUF conversions from `Serveurperso/Qwen3-TTS-GGUF`; the
-logical model is `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
+GGUF conversions from `Serveurperso/Qwen3-TTS-GGUF`: the base talker (default
+`voice_clone` mode) plus the shared 12 Hz codec; the VoiceDesign talker is
+fetched only when an operator adds it to the manifest for `voice_design` mode.
+The logical model is `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
 
 ## Prefetch
 

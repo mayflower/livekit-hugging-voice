@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 
 import pytest
 from hugging_voice_service.cancellation import GenerationToken
@@ -47,10 +48,13 @@ class RecordingTTS:
         *,
         language: str,
         instructions: str,
+        ref_audio: Path | None,
+        ref_text: str | None,
         cancelled: Callable[[], bool],
     ) -> AsyncIterator[bytes]:
         assert language == "German"
         assert instructions == "calm"
+        del ref_audio, ref_text
         self.calls.append(text)
         if not cancelled():
             yield bytes(960)
@@ -181,9 +185,11 @@ async def test_tts_forwards_each_frame_before_segment_generation_finishes() -> N
             *,
             language: str,
             instructions: str,
+            ref_audio: Path | None,
+            ref_text: str | None,
             cancelled: Callable[[], bool],
         ) -> AsyncIterator[bytes]:
-            del text, language, instructions, cancelled
+            del text, language, instructions, ref_audio, ref_text, cancelled
             yield b"first"
             first_generated.set()
             await continue_generation.wait()

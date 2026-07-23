@@ -9,6 +9,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from hugging_voice_protocol.audio import decode_pcm16_base64
@@ -124,6 +125,8 @@ class ResponseContext:
     model_language: str
     language_instruction: str
     voice_instructions: str
+    voice_ref_audio: Path | None
+    voice_ref_text: str | None
     system_prompt: str
     tools: tuple[FunctionTool, ...]
     tool_choice: ToolChoice
@@ -738,6 +741,12 @@ class VoicePipeline:
             instructions = f"{instructions}\n{response_instructions}".strip()
         language = self._speech.resolve_language(self.state.language)
         voice = self._speech.resolve_voice(self.state.voice)
+        voice_ref_audio: Path | None = None
+        voice_ref_text: str | None = None
+        if self._speech.tts_mode == "voice_clone":
+            reference = self._speech.resolve_voice_reference(self.state.voice, self.state.language)
+            voice_ref_audio = self._speech.voice_reference_path(reference)
+            voice_ref_text = reference.text
         context = ResponseContext(
             turn_id=turn_id,
             turn_revision=self.state.current_turn_revision,
@@ -752,6 +761,8 @@ class VoicePipeline:
                 language.model_language,
                 self.state.voice_instructions,
             ),
+            voice_ref_audio=voice_ref_audio,
+            voice_ref_text=voice_ref_text,
             system_prompt=self._speech.system_prompt,
             tools=tuple(self.state.tools if tools is None else tools),
             tool_choice=self.state.tool_choice if tool_choice is None else tool_choice,
@@ -968,6 +979,8 @@ class VoicePipeline:
                     text=segment,
                     language=context.model_language,
                     instructions=context.voice_instructions,
+                    ref_audio=context.voice_ref_audio,
+                    ref_text=context.voice_ref_text,
                     is_current=lambda: self.state.cancellation.is_current(context.token),
                     on_frame=send_frame,
                 )

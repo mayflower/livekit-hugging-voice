@@ -1,7 +1,16 @@
+import json
+import wave
 from pathlib import Path
 
 import pytest
-from hugging_voice_service.config import ServiceSettings, SpeechSettings, load_settings
+from hugging_voice_service.config import (
+    ServiceSettings,
+    SpeechSettings,
+    VoiceReference,
+    VoiceSettings,
+    default_voice_reference_dir,
+    load_settings,
+)
 from pydantic import ValidationError
 
 DEFAULT_CONFIG = Path(__file__).parents[1] / "config" / "default.yaml"
@@ -17,7 +26,13 @@ def test_default_config_matches_fixed_audio_and_capacity_contract() -> None:
     rendered = settings.speech.resolve_voice("warm_female").render("German")
     assert "native German speaker" in rendered
     assert "Keep the speaker identity unchanged across every utterance" in rendered
-    assert settings.speech.generation.do_sample is False
+    assert settings.speech.generation.do_sample is True
+    assert settings.speech.tts_mode == "voice_clone"
+    for voice_id, voice in settings.speech.voices.items():
+        assert set(voice.refs) == set(settings.speech.languages)
+        for language_id, reference in voice.refs.items():
+            assert reference.audio == f"{voice_id}.{language_id}.wav"
+            assert reference.text
     assert set(settings.speech.languages) == {"de", "en", "fr", "it"}
     assert len(settings.speech.voices) == 5
 
@@ -70,3 +85,71 @@ def test_yaml_root_must_be_a_mapping(tmp_path: Path) -> None:
     path.write_text("- invalid\n", encoding="utf-8")
     with pytest.raises(ValueError, match="YAML mapping"):
         load_settings(path)
+
+
+def test_voice_clone_requires_a_reference_per_language() -> None:
+    with pytest.raises(ValidationError, match="lacks a voice_clone reference"):
+        SpeechSettings(
+            tts_mode="voice_clone",
+            voices={"warm_female": VoiceSettings(instructions="A {language} voice.")},
+        )
+
+
+def test_voice_design_mode_does_not_require_references() -> None:
+    speech = SpeechSettings(
+        tts_mode="voice_design",
+        voices={"warm_female": VoiceSettings(instructions="A {language} voice.")},
+    )
+    assert speech.tts_mode == "voice_design"
+
+
+def test_voice_reference_filenames_are_plain_wav_names() -> None:
+    for bad in ("../warm.wav", "warm/../x.wav", "warm.mp3", "/abs.wav", "a..b.wav"):
+        with pytest.raises(ValidationError):
+            VoiceReference(audio=bad, text="transcript")
+
+
+def test_voice_reference_resolution_and_path_override(tmp_path: Path) -> None:
+    speech = SpeechSettings(voice_ref_dir=tmp_path)
+    reference = speech.resolve_voice_reference("warm_female", "de")
+    assert speech.voice_reference_path(reference) == tmp_path / "warm_female.de.wav"
+    with pytest.raises(ValueError, match="no voice_clone reference"):
+        speech.resolve_voice_reference("warm_female", "es")
+    with pytest.raises(ValueError, match="unsupported voice"):
+        speech.resolve_voice_reference("unknown_voice", "de")
+
+
+def test_packaged_voice_references_are_complete_and_valid() -> None:
+    speech = SpeechSettings()
+    for voice in speech.voices.values():
+        for reference in voice.refs.values():
+            path = speech.voice_reference_path(reference)
+            with wave.open(str(path), "rb") as recording:
+                assert recording.getnchannels() == 1
+                assert recording.getsampwidth() == 2
+                assert recording.getframerate() == 24_000
+                duration = recording.getnframes() / recording.getframerate()
+                assert 3.0 <= duration <= 15.0
+
+
+def test_reference_transcripts_are_identical_across_code_yaml_and_recordings() -> None:
+    """The transcript must match the frozen audio exactly (it anchors the ICL
+    clone), so the code defaults, default.yaml, and the recording provenance
+    must never drift apart."""
+
+    code = SpeechSettings()
+    from_yaml = load_settings(DEFAULT_CONFIG).speech
+    metadata = json.loads(
+        (default_voice_reference_dir() / "metadata.json").read_text(encoding="utf-8")
+    )
+    recorded = {
+        (artifact["voice"], artifact["language"]): artifact["text"]
+        for artifact in metadata["artifacts"]
+    }
+    assert set(from_yaml.voices) == set(code.voices)
+    for voice_id, voice in from_yaml.voices.items():
+        assert set(voice.refs) == set(code.voices[voice_id].refs)
+        for language, reference in voice.refs.items():
+            assert reference.text == code.voices[voice_id].refs[language].text
+            assert reference.text == recorded[(voice_id, language)]
+            assert reference.audio == code.voices[voice_id].refs[language].audio

@@ -145,3 +145,10 @@ def test_compose_mounts_model_root_and_generated_lock_read_only() -> None:
     assert mounts[lock_target]["read_only"] is True
     assert service["environment"]["HV_MODELS__LOCK_FILE"] == lock_target
     assert "/tmp:rw,noexec,nosuid,size=4g,uid=10001,gid=10001" in service["tmpfs"]
+
+
+def test_configmap_speech_section_matches_the_default_config() -> None:
+    configmap = load_yaml("deploy/kubernetes/base/config-map.yaml")
+    embedded = yaml.safe_load(configmap["data"]["config.yaml"])
+    default = load_yaml("services/gpu-service/config/default.yaml")
+    assert embedded["speech"] == default["speech"]

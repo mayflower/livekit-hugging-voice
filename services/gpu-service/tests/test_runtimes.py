@@ -114,6 +114,7 @@ class FakeQwenModel:
         self.warmups = 0
         self.closed_streams = 0
         self.calls: list[dict[str, Any]] = []
+        self.clone_calls: list[dict[str, Any]] = []
 
     def warmup(self, *, prefill_len: int = 100) -> None:
         assert prefill_len == 100
@@ -128,6 +129,13 @@ class FakeQwenModel:
             yield np.full(100, -0.5, dtype=np.float32), 24_000, {}
         finally:
             self.closed_streams += 1
+
+    def generate_voice_clone_streaming(
+        self, **kwargs: Any
+    ) -> Iterator[tuple[np.ndarray[Any, Any], int, dict[str, Any]]]:
+        self.clone_calls.append(kwargs)
+        yield np.full(600, 0.5, dtype=np.float32), 24_000, {}
+        yield np.full(100, -0.5, dtype=np.float32), 24_000, {}
 
 
 @pytest.mark.asyncio
@@ -160,7 +168,7 @@ async def test_qwen_forwards_speech_options_and_emits_exact_pcm_frames(tmp_path:
     assert "speaker" not in call
     assert call["language"] == "English"
     assert call["instruct"] == "Speak warmly."
-    assert call["do_sample"] is False
+    assert call["do_sample"] is True
     assert call["temperature"] == 0.9
     assert call["top_k"] == 50
     assert call["top_p"] == 1.0
@@ -194,6 +202,68 @@ async def test_qwen_closes_native_iterator_when_audio_consumer_stops_early(
     await cast(AsyncGenerator[bytes, None], stream).aclose()
 
     assert model.closed_streams == 1
+
+
+@pytest.mark.asyncio
+async def test_qwen_voice_clone_streams_from_the_frozen_reference(tmp_path: Path) -> None:
+    talker = tmp_path / "talker.gguf"
+    codec = tmp_path / "codec.gguf"
+    reference = tmp_path / "warm_female.de.wav"
+    talker.write_bytes(b"talker")
+    codec.write_bytes(b"codec")
+    reference.write_bytes(b"reference")
+    model = FakeQwenModel()
+    runtime = QwenTTSRuntime(
+        talker,
+        codec,
+        model_factory=lambda talker_path, codec_path: model,
+        cuda_probe=lambda: None,
+        mode="voice_clone",
+        voice_references=(
+            ("German", reference, "Willkommen bei unserem Sprachassistenten!"),
+            ("English", reference, "Welcome to our voice assistant!"),
+        ),
+    )
+    runtime.load()
+    runtime.warmup()
+    assert not model.calls
+    # Warmup pre-extracts every frozen reference once, speaking its own
+    # transcript so the stream cannot legitimately be empty.
+    assert len(model.clone_calls) == 2
+    assert model.clone_calls[0]["language"] == "German"
+    assert model.clone_calls[0]["text"] == "Willkommen bei unserem Sprachassistenten!"
+    assert model.clone_calls[1]["language"] == "English"
+    assert model.clone_calls[1]["text"] == "Welcome to our voice assistant!"
+    frames = [
+        frame
+        async for frame in runtime.stream_pcm16_frames(
+            "Hello.",
+            language="English",
+            instructions="Delivery style only: excited.",
+            ref_audio=reference,
+            ref_text="Willkommen bei unserem Sprachassistenten!",
+        )
+    ]
+    assert [len(frame) for frame in frames] == [OUTPUT_FRAME_BYTES, OUTPUT_FRAME_BYTES]
+    call = model.clone_calls[-1]
+    assert call["ref_audio"] == str(reference)
+    assert call["ref_text"] == "Willkommen bei unserem Sprachassistenten!"
+    assert "instruct" not in call
+    assert call["do_sample"] is True
+    with pytest.raises(RuntimeError, match="reference"):
+        async for _ in runtime.stream_pcm16_frames("Hi.", language="English", instructions=""):
+            pass
+
+
+def test_qwen_voice_clone_requires_the_frozen_references(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="voice references"):
+        QwenTTSRuntime(
+            tmp_path / "talker.gguf",
+            tmp_path / "codec.gguf",
+            model_factory=lambda talker_path, codec_path: FakeQwenModel(),
+            cuda_probe=lambda: None,
+            mode="voice_clone",
+        )
 
 
 @pytest.mark.asyncio

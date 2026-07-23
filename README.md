@@ -18,7 +18,11 @@ The service is deliberately not a generic model platform. A GPU pod will admit a
 most two isolated sessions while loading Parakeet, Gemma, and Qwen exactly once.
 Language codes and public voice profiles are configured by the operator and selected
 per session. The shipped catalog exposes German, English, French, and Italian plus
-five fixed VoiceDesign profiles; `de` and `warm_female` are the defaults.
+five fixed voice profiles; `de` and `warm_female` are the defaults. By default the
+profiles are spoken by the Qwen3-TTS base talker from frozen, operator-defined
+reference recordings (`speech.tts_mode: voice_clone`), which keeps each speaker
+identity stable across segments and sessions; `voice_design` mode rebuilds the
+voice from its description instead.
 
 ## Status
 
@@ -97,7 +101,9 @@ operational details are in
 
 The service config owns the allowed language and voice maps. Public language codes
 map to Qwen language names plus an LLM response instruction; public voice IDs map to
-fixed VoiceDesign descriptions rendered for the selected native language. Edit
+fixed voice profiles: a VoiceDesign description rendered for the selected native
+language plus, for the default `voice_clone` mode, one frozen reference recording
+per language. Edit
 `services/gpu-service/config/default.yaml` for Docker-image defaults or the
 Kubernetes ConfigMap for a deployment. `HV_SPEECH__DEFAULT_LANGUAGE` and
 `HV_SPEECH__DEFAULT_VOICE` can override the two scalar defaults.

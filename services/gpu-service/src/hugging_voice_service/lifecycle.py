@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import wave
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
@@ -19,6 +20,36 @@ from .runtimes.qwen_tts import QwenTTSRuntime
 from .telemetry import ServiceTelemetry
 
 logger = logging.getLogger(__name__)
+
+# Both talker variants come from the same locked model repository and share the
+# codec. Only the base talker (default voice_clone mode) is in the shipped
+# manifest; voice_design requires adding the VoiceDesign talker to
+# models/manifest.yaml and re-running the prefetch.
+QWEN_TALKER_FILES: dict[str, str] = {
+    "voice_clone": "qwen-talker-1.7b-base-BF16.gguf",
+    "voice_design": "qwen-talker-1.7b-voicedesign-BF16.gguf",
+}
+
+
+def _verify_voice_references(speech: SpeechSettings) -> None:
+    """Fail startup early when a frozen voice reference is missing or corrupt."""
+
+    if speech.tts_mode != "voice_clone":
+        return
+    for voice_id in speech.voices:
+        for language in speech.languages:
+            reference = speech.resolve_voice_reference(voice_id, language)
+            path = speech.voice_reference_path(reference)
+            try:
+                with wave.open(str(path), "rb") as recording:
+                    if recording.getnframes() <= 0:
+                        raise RuntimeError(
+                            f"voice reference {path} for {voice_id}/{language} is empty"
+                        )
+            except (OSError, wave.Error) as exc:
+                raise RuntimeError(
+                    f"voice reference {path} for {voice_id}/{language} is missing or invalid"
+                ) from exc
 
 
 class LifecyclePhase(StrEnum):
@@ -116,11 +147,25 @@ def _gemma_factory(port: int, violation: Callable[[], None]) -> GemmaRuntime:
 def _qwen_factory(talker: Path, codec: Path, speech: SpeechSettings) -> QwenTTSRuntime:
     language = speech.resolve_language(speech.default_language)
     voice = speech.resolve_voice(speech.default_voice)
+    voice_references: list[tuple[str, Path, str]] = []
+    if speech.tts_mode == "voice_clone":
+        for voice_id in speech.voices:
+            for language_id, language_settings in speech.languages.items():
+                reference = speech.resolve_voice_reference(voice_id, language_id)
+                voice_references.append(
+                    (
+                        language_settings.model_language,
+                        speech.voice_reference_path(reference),
+                        reference.text,
+                    )
+                )
     return QwenTTSRuntime(
         talker,
         codec,
+        mode=speech.tts_mode,
         warmup_language=language.model_language,
         warmup_instructions=voice.render(language.model_language),
+        voice_references=tuple(voice_references),
         do_sample=speech.generation.do_sample,
         temperature=speech.generation.temperature,
         top_k=speech.generation.top_k,
@@ -193,6 +238,7 @@ class ServiceLifecycle:
                     self.lock,
                     self.settings.models.root,
                 )
+                await asyncio.to_thread(_verify_voice_references, self.settings.speech)
                 artifacts = self._required_artifacts(self.lock)
 
                 self.phase = LifecyclePhase.CHECKING_CUDA
@@ -327,12 +373,13 @@ class ServiceLifecycle:
         missing = required - models.keys()
         if missing:
             raise RuntimeError(f"model lock is missing required entries: {sorted(missing)}")
+        talker_file = QWEN_TALKER_FILES[self.settings.speech.tts_mode]
         return {
             "gemma": self._only_file(models["google/gemma-4-31B-it"]),
             "parakeet": self._only_file(models["nvidia/parakeet-tdt-0.6b-v3"]),
             "qwen_talker": self._named_file(
                 models["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"],
-                "qwen-talker-1.7b-voicedesign-BF16.gguf",
+                talker_file,
             ),
             "qwen_codec": self._named_file(
                 models["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"],

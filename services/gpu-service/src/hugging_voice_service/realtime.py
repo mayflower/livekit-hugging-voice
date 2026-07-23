@@ -532,6 +532,7 @@ class RealtimeService:
             voice=self.settings.speech.default_voice,
             supported_languages=tuple(sorted(self.settings.speech.languages)),
             supported_voices=tuple(sorted(self.settings.speech.voices)),
+            tts_mode=self.settings.speech.tts_mode,
             llama_slot_id=cast("Literal[0, 1]", slot_id),
         )
 

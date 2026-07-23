@@ -1,0 +1,897 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-07-23T07:32:25.586829+00:00",
+  "gpu": "NVIDIA RTX PRO 3000 Blackwell Generation Laptop GPU",
+  "qwen_revision": "e0f336a048a3de02b29b8ad92969217d9ecffe3e",
+  "artifacts": [
+    {
+      "voice": "warm_female",
+      "language": "de",
+      "file": "warm_female.de.wav",
+      "text": "Willkommen bei unserem Sprachassistenten! Ich helfe dir gerne bei Fragen rund um Technik, Alltag und Wissen, und zwar ganz natürlich im Gespräch.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A warm, approachable adult female native German speaker with authentic pronunciation and prosody, a calm conversational rhythm, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 3,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 10.24,
+          "mean_dbfs": -29.3,
+          "halves_drift_db": 2.6,
+          "longest_internal_silence_seconds": 0.8,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 9.6,
+          "mean_dbfs": -24.7,
+          "halves_drift_db": 3.3,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 8.72,
+          "mean_dbfs": -20.2,
+          "halves_drift_db": 3.0,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 8.88,
+          "mean_dbfs": -24.5,
+          "halves_drift_db": 2.2,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        }
+      ],
+      "sha256": "4337d9ebe9f06ecfb20ec57c9c9bda94e22e567944a5031d67596e10655d57d7"
+    },
+    {
+      "voice": "warm_female",
+      "language": "en",
+      "file": "warm_female.en.wav",
+      "text": "Welcome to our voice assistant! I am happy to help you with questions about technology, everyday life, and general knowledge, all in a natural conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A warm, approachable adult female native English speaker with authentic pronunciation and prosody, a calm conversational rhythm, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 1,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 8.4,
+          "mean_dbfs": -21.4,
+          "halves_drift_db": 1.0,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 9.68,
+          "mean_dbfs": -22.0,
+          "halves_drift_db": 0.3,
+          "longest_internal_silence_seconds": 0.7,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 10.16,
+          "mean_dbfs": -21.4,
+          "halves_drift_db": 1.2,
+          "longest_internal_silence_seconds": 0.6,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 10.24,
+          "mean_dbfs": -20.8,
+          "halves_drift_db": 0.5,
+          "longest_internal_silence_seconds": 0.7,
+          "failures": []
+        }
+      ],
+      "sha256": "dc2e796befe88dfd1863831c032f5190d463ca95be9ab2adde48f7bf2786ceb0"
+    },
+    {
+      "voice": "warm_female",
+      "language": "fr",
+      "file": "warm_female.fr.wav",
+      "text": "Bienvenue chez votre assistant vocal ! Je vous aide volontiers pour toutes vos questions sur la technique, la vie quotidienne et la culture générale, tout naturellement, au fil de la conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A warm, approachable adult female native French speaker with authentic pronunciation and prosody, a calm conversational rhythm, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 3,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 9.84,
+          "mean_dbfs": -21.9,
+          "halves_drift_db": 2.1,
+          "longest_internal_silence_seconds": 0.2,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 9.28,
+          "mean_dbfs": -22.3,
+          "halves_drift_db": 1.1,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 11.2,
+          "mean_dbfs": -20.5,
+          "halves_drift_db": 1.7,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 13.36,
+          "mean_dbfs": -23.1,
+          "halves_drift_db": 0.6,
+          "longest_internal_silence_seconds": 0.6,
+          "failures": []
+        }
+      ],
+      "sha256": "789e1371d21947105f116a0b9b8eb361a2191b2738658d63e34a57efabc62c86"
+    },
+    {
+      "voice": "warm_female",
+      "language": "it",
+      "file": "warm_female.it.wav",
+      "text": "Benvenuti nel vostro assistente vocale! Vi aiuto volentieri con domande su tecnologia, vita quotidiana e cultura generale, in modo del tutto naturale durante la conversazione.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A warm, approachable adult female native Italian speaker with authentic pronunciation and prosody, a calm conversational rhythm, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 1,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 11.92,
+          "mean_dbfs": -20.8,
+          "halves_drift_db": 1.6,
+          "longest_internal_silence_seconds": 0.6,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 12.24,
+          "mean_dbfs": -18.9,
+          "halves_drift_db": 0.6,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 12.24,
+          "mean_dbfs": -21.5,
+          "halves_drift_db": 0.6,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 10.96,
+          "mean_dbfs": -21.8,
+          "halves_drift_db": 1.5,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        }
+      ],
+      "sha256": "2bb63b701d9c1a310a7d8e43e105a71d3bbaf5b4386385c5907de3090931149b"
+    },
+    {
+      "voice": "clear_female",
+      "language": "de",
+      "file": "clear_female.de.wav",
+      "text": "Willkommen bei unserem Sprachassistenten! Ich helfe dir gerne bei Fragen rund um Technik, Alltag und Wissen, und zwar ganz natürlich im Gespräch.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A clear, confident adult female native German speaker with precise natural pronunciation, balanced energy, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 2,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 9.52,
+          "mean_dbfs": -21.0,
+          "halves_drift_db": 3.7,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 9.76,
+          "mean_dbfs": -21.8,
+          "halves_drift_db": 4.0,
+          "longest_internal_silence_seconds": 0.7,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 8.32,
+          "mean_dbfs": -26.1,
+          "halves_drift_db": 3.0,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 9.76,
+          "mean_dbfs": -22.3,
+          "halves_drift_db": 3.8,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        }
+      ],
+      "sha256": "d66b2a8bab4e5099ee5c4b7b13ba92f7341c196d8332cc54b6d66d5dc106fef2"
+    },
+    {
+      "voice": "clear_female",
+      "language": "en",
+      "file": "clear_female.en.wav",
+      "text": "Welcome to our voice assistant! I am happy to help you with questions about technology, everyday life, and general knowledge, all in a natural conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A clear, confident adult female native English speaker with precise natural pronunciation, balanced energy, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 1,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 9.6,
+          "mean_dbfs": -21.6,
+          "halves_drift_db": 0.6,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 8.8,
+          "mean_dbfs": -21.5,
+          "halves_drift_db": 0.5,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 10.16,
+          "mean_dbfs": -19.9,
+          "halves_drift_db": 0.8,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 9.68,
+          "mean_dbfs": -21.2,
+          "halves_drift_db": 0.6,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        }
+      ],
+      "sha256": "66c56c0ebbf857c8b0f28014856c9b57ba923d44e464e89bd7ec00840d0b8e1d"
+    },
+    {
+      "voice": "clear_female",
+      "language": "fr",
+      "file": "clear_female.fr.wav",
+      "text": "Bienvenue chez votre assistant vocal ! Je vous aide volontiers pour toutes vos questions sur la technique, la vie quotidienne et la culture générale, tout naturellement, au fil de la conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A clear, confident adult female native French speaker with precise natural pronunciation, balanced energy, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 2,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 10.8,
+          "mean_dbfs": -21.6,
+          "halves_drift_db": 0.9,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 11.12,
+          "mean_dbfs": -19.1,
+          "halves_drift_db": 0.4,
+          "longest_internal_silence_seconds": 0.1,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 11.28,
+          "mean_dbfs": -22.7,
+          "halves_drift_db": 0.1,
+          "longest_internal_silence_seconds": 0.6,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 11.44,
+          "mean_dbfs": -20.8,
+          "halves_drift_db": 0.8,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        }
+      ],
+      "sha256": "cd3da1b69c7b4b4c10f3a8847183f9930ff0e482778acc9c798ebacfed6896ef"
+    },
+    {
+      "voice": "clear_female",
+      "language": "it",
+      "file": "clear_female.it.wav",
+      "text": "Benvenuti nel vostro assistente vocale! Vi aiuto volentieri con domande su tecnologia, vita quotidiana e cultura generale, in modo del tutto naturale durante la conversazione.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A clear, confident adult female native Italian speaker with precise natural pronunciation, balanced energy, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 0,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 12.72,
+          "mean_dbfs": -19.7,
+          "halves_drift_db": 0.3,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 13.6,
+          "mean_dbfs": -20.1,
+          "halves_drift_db": 0.8,
+          "longest_internal_silence_seconds": 0.7,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 12.4,
+          "mean_dbfs": -22.2,
+          "halves_drift_db": 0.4,
+          "longest_internal_silence_seconds": 0.7,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 11.92,
+          "mean_dbfs": -20.3,
+          "halves_drift_db": 2.0,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        }
+      ],
+      "sha256": "4f6b136d2b66f4225ce0a4b1cd7a5f668d41176572ccb3007a42a6cf9a32c468"
+    },
+    {
+      "voice": "warm_male",
+      "language": "de",
+      "file": "warm_male.de.wav",
+      "text": "Willkommen bei unserem Sprachassistenten! Ich helfe dir gerne bei Fragen rund um Technik, Alltag und Wissen, und zwar ganz natürlich im Gespräch.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A warm, reassuring adult male native German speaker with authentic pronunciation and prosody, a relaxed conversational rhythm, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 0,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 11.84,
+          "mean_dbfs": -23.1,
+          "halves_drift_db": 2.0,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 11.2,
+          "mean_dbfs": -20.9,
+          "halves_drift_db": 2.1,
+          "longest_internal_silence_seconds": 0.6,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 11.68,
+          "mean_dbfs": -21.8,
+          "halves_drift_db": 4.5,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 7.12,
+          "mean_dbfs": -21.9,
+          "halves_drift_db": 2.6,
+          "longest_internal_silence_seconds": 0.2,
+          "failures": []
+        }
+      ],
+      "sha256": "28bfffd28a169322405ed2565f45a57f1a044939d9f6a96de1987769636c8df0"
+    },
+    {
+      "voice": "warm_male",
+      "language": "en",
+      "file": "warm_male.en.wav",
+      "text": "Welcome to our voice assistant! I am happy to help you with questions about technology, everyday life, and general knowledge, all in a natural conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A warm, reassuring adult male native English speaker with authentic pronunciation and prosody, a relaxed conversational rhythm, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 3,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 10.24,
+          "mean_dbfs": -21.9,
+          "halves_drift_db": 2.1,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 9.04,
+          "mean_dbfs": -22.2,
+          "halves_drift_db": 1.5,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 10.4,
+          "mean_dbfs": -20.5,
+          "halves_drift_db": 1.4,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 10.32,
+          "mean_dbfs": -21.0,
+          "halves_drift_db": 0.6,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        }
+      ],
+      "sha256": "7294699d478a7033e65bae3ca9bc268766526d47aef755d97cde765f503ec7c9"
+    },
+    {
+      "voice": "warm_male",
+      "language": "fr",
+      "file": "warm_male.fr.wav",
+      "text": "Bienvenue chez votre assistant vocal ! Je vous aide volontiers pour toutes vos questions sur la technique, la vie quotidienne et la culture générale, tout naturellement, au fil de la conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A warm, reassuring adult male native French speaker with authentic pronunciation and prosody, a relaxed conversational rhythm, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 0,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 13.12,
+          "mean_dbfs": -19.4,
+          "halves_drift_db": 0.2,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 12.0,
+          "mean_dbfs": -23.7,
+          "halves_drift_db": 1.9,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 12.24,
+          "mean_dbfs": -19.9,
+          "halves_drift_db": 0.3,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 11.52,
+          "mean_dbfs": -21.4,
+          "halves_drift_db": 0.7,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        }
+      ],
+      "sha256": "4bd7c98b2d01f88748c837abe8d249c0b896793077a5101611338922ab0bc11b"
+    },
+    {
+      "voice": "warm_male",
+      "language": "it",
+      "file": "warm_male.it.wav",
+      "text": "Benvenuti nel vostro assistente vocale! Vi aiuto volentieri con domande su tecnologia, vita quotidiana e cultura generale, in modo del tutto naturale durante la conversazione.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A warm, reassuring adult male native Italian speaker with authentic pronunciation and prosody, a relaxed conversational rhythm, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 2,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 16.16,
+          "mean_dbfs": -22.4,
+          "halves_drift_db": 0.4,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": [
+            "duration 16.2s outside bounds"
+          ]
+        },
+        {
+          "take": 1,
+          "duration_seconds": 13.76,
+          "mean_dbfs": -21.9,
+          "halves_drift_db": 3.3,
+          "longest_internal_silence_seconds": 0.6,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 14.0,
+          "mean_dbfs": -21.9,
+          "halves_drift_db": 0.8,
+          "longest_internal_silence_seconds": 0.7,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 13.52,
+          "mean_dbfs": -24.8,
+          "halves_drift_db": 1.8,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        }
+      ],
+      "sha256": "04dba5eb1c0be150a0a847e2ae49c886895c57854a933dd9b2a653ca1e6af64d"
+    },
+    {
+      "voice": "clear_male",
+      "language": "de",
+      "file": "clear_male.de.wav",
+      "text": "Willkommen bei unserem Sprachassistenten! Ich helfe dir gerne bei Fragen rund um Technik, Alltag und Wissen, und zwar ganz natürlich im Gespräch.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A clear, professional adult male native German speaker with precise natural pronunciation, steady pacing, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 1,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 11.2,
+          "mean_dbfs": -23.2,
+          "halves_drift_db": 2.5,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 10.24,
+          "mean_dbfs": -22.9,
+          "halves_drift_db": 1.9,
+          "longest_internal_silence_seconds": 0.7,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 11.68,
+          "mean_dbfs": -22.9,
+          "halves_drift_db": 2.0,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 9.6,
+          "mean_dbfs": -24.9,
+          "halves_drift_db": 3.2,
+          "longest_internal_silence_seconds": 0.2,
+          "failures": []
+        }
+      ],
+      "sha256": "85a7536d660253ff1e23ffe04f7b713600400f388f362e9d0a81a8dd3e262af4"
+    },
+    {
+      "voice": "clear_male",
+      "language": "en",
+      "file": "clear_male.en.wav",
+      "text": "Welcome to our voice assistant! I am happy to help you with questions about technology, everyday life, and general knowledge, all in a natural conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A clear, professional adult male native English speaker with precise natural pronunciation, steady pacing, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 3,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 8.96,
+          "mean_dbfs": -19.7,
+          "halves_drift_db": 1.0,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 8.88,
+          "mean_dbfs": -23.5,
+          "halves_drift_db": 1.3,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 8.4,
+          "mean_dbfs": -21.7,
+          "halves_drift_db": 2.0,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 9.36,
+          "mean_dbfs": -22.0,
+          "halves_drift_db": 0.7,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        }
+      ],
+      "sha256": "bac15ccd7f8fa80a0909c2d3883bb76df7ab4e5003c399af39a0c0ed62de0f18"
+    },
+    {
+      "voice": "clear_male",
+      "language": "fr",
+      "file": "clear_male.fr.wav",
+      "text": "Bienvenue chez votre assistant vocal ! Je vous aide volontiers pour toutes vos questions sur la technique, la vie quotidienne et la culture générale, tout naturellement, au fil de la conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A clear, professional adult male native French speaker with precise natural pronunciation, steady pacing, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 3,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 12.48,
+          "mean_dbfs": -24.1,
+          "halves_drift_db": 2.3,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 11.2,
+          "mean_dbfs": -22.6,
+          "halves_drift_db": 0.7,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 12.16,
+          "mean_dbfs": -22.5,
+          "halves_drift_db": 5.9,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 11.28,
+          "mean_dbfs": -18.7,
+          "halves_drift_db": 0.4,
+          "longest_internal_silence_seconds": 0.7,
+          "failures": []
+        }
+      ],
+      "sha256": "ee0927a7b212f2fb42058d726da6cc54a657a35c3cb5f2ab56a3dd2b1c741223"
+    },
+    {
+      "voice": "clear_male",
+      "language": "it",
+      "file": "clear_male.it.wav",
+      "text": "Benvenuti nel vostro assistente vocale! Vi aiuto volentieri con domande su tecnologia, vita quotidiana e cultura generale, in modo del tutto naturale durante la conversazione.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A clear, professional adult male native Italian speaker with precise natural pronunciation, steady pacing, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 1,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 14.96,
+          "mean_dbfs": -19.0,
+          "halves_drift_db": 0.2,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": [
+            "duration 15.0s outside bounds"
+          ]
+        },
+        {
+          "take": 1,
+          "duration_seconds": 11.68,
+          "mean_dbfs": -18.9,
+          "halves_drift_db": 0.6,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 15.44,
+          "mean_dbfs": -19.2,
+          "halves_drift_db": 0.3,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": [
+            "duration 15.4s outside bounds"
+          ]
+        },
+        {
+          "take": 3,
+          "duration_seconds": 12.4,
+          "mean_dbfs": -20.0,
+          "halves_drift_db": 0.7,
+          "longest_internal_silence_seconds": 0.0,
+          "failures": []
+        }
+      ],
+      "sha256": "764c0f024ae3500bea2e5d36ec0bab7756e5b33043175890a63630a730e91d62"
+    },
+    {
+      "voice": "friendly_neutral",
+      "language": "de",
+      "file": "friendly_neutral.de.wav",
+      "text": "Willkommen bei unserem Sprachassistenten! Ich helfe dir gerne bei Fragen rund um Technik, Alltag und Wissen, und zwar ganz natürlich im Gespräch.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A friendly androgynous adult native German speaker with authentic natural pronunciation, expressive conversational prosody, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 1,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 8.96,
+          "mean_dbfs": -21.9,
+          "halves_drift_db": 2.2,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 10.8,
+          "mean_dbfs": -24.2,
+          "halves_drift_db": 1.0,
+          "longest_internal_silence_seconds": 0.7,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 9.12,
+          "mean_dbfs": -23.0,
+          "halves_drift_db": 1.9,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 8.16,
+          "mean_dbfs": -23.0,
+          "halves_drift_db": 3.5,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        }
+      ],
+      "sha256": "7f8c16ca1cc266746c160e6853efbe3cd0dd14574c10ceb70cdf1efbb0f82e5f"
+    },
+    {
+      "voice": "friendly_neutral",
+      "language": "en",
+      "file": "friendly_neutral.en.wav",
+      "text": "Welcome to our voice assistant! I am happy to help you with questions about technology, everyday life, and general knowledge, all in a natural conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A friendly androgynous adult native English speaker with authentic natural pronunciation, expressive conversational prosody, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 3,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 9.92,
+          "mean_dbfs": -19.9,
+          "halves_drift_db": 0.7,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 10.24,
+          "mean_dbfs": -22.6,
+          "halves_drift_db": 0.8,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 9.36,
+          "mean_dbfs": -20.0,
+          "halves_drift_db": 0.8,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 9.68,
+          "mean_dbfs": -23.5,
+          "halves_drift_db": 0.5,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        }
+      ],
+      "sha256": "f25994009da80dc6919290c5b638bd6f95ab8ed02a67d494e548b3e9c25129c8"
+    },
+    {
+      "voice": "friendly_neutral",
+      "language": "fr",
+      "file": "friendly_neutral.fr.wav",
+      "text": "Bienvenue chez votre assistant vocal ! Je vous aide volontiers pour toutes vos questions sur la technique, la vie quotidienne et la culture générale, tout naturellement, au fil de la conversation.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A friendly androgynous adult native French speaker with authentic natural pronunciation, expressive conversational prosody, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 2,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 10.64,
+          "mean_dbfs": -19.7,
+          "halves_drift_db": 0.8,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 11.52,
+          "mean_dbfs": -21.1,
+          "halves_drift_db": 3.5,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 9.76,
+          "mean_dbfs": -21.1,
+          "halves_drift_db": 0.2,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        },
+        {
+          "take": 3,
+          "duration_seconds": 12.08,
+          "mean_dbfs": -21.8,
+          "halves_drift_db": 0.3,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        }
+      ],
+      "sha256": "5bba6d128138d94fe93343a786d9cf3a3f6a765cc68d7576a6ea053fc1d2fab5"
+    },
+    {
+      "voice": "friendly_neutral",
+      "language": "it",
+      "file": "friendly_neutral.it.wav",
+      "text": "Benvenuti nel vostro assistente vocale! Vi aiuto volentieri con domande su tecnologia, vita quotidiana e cultura generale, in modo del tutto naturale durante la conversazione.",
+      "instruction": "Keep the speaker identity unchanged across every utterance: preserve the same perceived person, vocal age, pitch range, resonance, timbre, and accent. Speaker identity: A friendly androgynous adult native Italian speaker with authentic natural pronunciation, expressive conversational prosody, and no foreign accent.",
+      "sample_rate": 24000,
+      "chosen_take": 1,
+      "takes": [
+        {
+          "take": 0,
+          "duration_seconds": 12.64,
+          "mean_dbfs": -20.5,
+          "halves_drift_db": 1.5,
+          "longest_internal_silence_seconds": 0.5,
+          "failures": []
+        },
+        {
+          "take": 1,
+          "duration_seconds": 12.16,
+          "mean_dbfs": -20.4,
+          "halves_drift_db": 0.1,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": []
+        },
+        {
+          "take": 2,
+          "duration_seconds": 14.16,
+          "mean_dbfs": -21.0,
+          "halves_drift_db": 0.8,
+          "longest_internal_silence_seconds": 0.3,
+          "failures": [
+            "duration 14.2s outside bounds"
+          ]
+        },
+        {
+          "take": 3,
+          "duration_seconds": 13.68,
+          "mean_dbfs": -22.3,
+          "halves_drift_db": 0.9,
+          "longest_internal_silence_seconds": 0.4,
+          "failures": []
+        }
+      ],
+      "sha256": "19dd1dd8660663b3c116b816bf2f4d9ba9c8321e76035d46dd0cb92bc021f74d"
+    }
+  ],
+  "review_note": "Listen to every recording before committing it as package data; these files freeze the public speaker identities."
+}

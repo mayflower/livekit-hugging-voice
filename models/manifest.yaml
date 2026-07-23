@@ -22,7 +22,10 @@ models:
     revision: e0f336a048a3de02b29b8ad92969217d9ecffe3e
     license: Apache-2.0
     files:
-      - path: qwen-talker-1.7b-voicedesign-BF16.gguf
+      # Base talker + shared codec cover the default voice_clone mode. To run
+      # voice_design (or to re-render the frozen reference recordings), add
+      # "- path: qwen-talker-1.7b-voicedesign-BF16.gguf" and re-run the prefetch.
+      - path: qwen-talker-1.7b-base-BF16.gguf
       - path: qwen-tokenizer-12hz-BF16.gguf
 
   - delivery: python-package

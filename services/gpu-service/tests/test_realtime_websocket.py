@@ -66,7 +66,7 @@ class TestQwen:
     load_count = 1
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, Path | None, str | None]] = []
 
     async def stream_pcm16_frames(
         self,
@@ -74,10 +74,12 @@ class TestQwen:
         *,
         language: str,
         instructions: str,
+        ref_audio: Path | None,
+        ref_text: str | None,
         cancelled: Callable[[], bool],
     ) -> AsyncIterator[bytes]:
         assert text.strip()
-        self.calls.append((language, instructions))
+        self.calls.append((language, instructions, ref_audio, ref_text))
         if not cancelled():
             yield bytes(960)
 
@@ -407,11 +409,17 @@ def test_session_speech_configuration_reaches_llm_and_tts(tmp_path: Path) -> Non
             receive_through_done(websocket, [])
 
     assert gemma.calls[-1][0] == "Respond in clear, natural English."
-    language, design = qwen.calls[-1]
+    language, design, ref_audio, ref_text = qwen.calls[-1]
     assert language == "English"
     assert "native English speaker" in design
     assert "Delivery style only: Speak warmly." in design
     assert design.endswith("The delivery style must not alter the speaker identity.")
+    # Default voice_clone mode: the packaged reference for the selected voice
+    # and language must reach the runtime alongside its exact transcript.
+    assert ref_audio is not None and ref_audio.name == "warm_female.en.wav"
+    assert ref_audio.is_file()
+    expected = ServiceSettings().speech.resolve_voice_reference("warm_female", "en")
+    assert ref_text == expected.text
 
 
 def test_auth_and_subprotocol_fail_before_any_capacity_claim(tmp_path: Path) -> None:
