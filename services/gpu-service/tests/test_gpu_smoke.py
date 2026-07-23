@@ -96,6 +96,14 @@ async def test_real_german_stt_gemma_and_tts_smoke() -> None:
         tts = cast(TTSRuntime, lifecycle.qwen)
         language = settings.speech.resolve_language(settings.speech.default_language)
         voice = settings.speech.resolve_voice(settings.speech.default_voice)
+        ref_audio = None
+        ref_text = None
+        if settings.speech.tts_mode == "voice_clone":
+            reference = settings.speech.resolve_voice_reference(
+                settings.speech.default_voice, settings.speech.default_language
+            )
+            ref_audio = settings.speech.voice_reference_path(reference)
+            ref_text = reference.text
         frames: list[bytes] = []
         segmenter = SpeechTextSegmenter()
         for segment in segmenter.feed(visible) + segmenter.flush():
@@ -103,6 +111,8 @@ async def test_real_german_stt_gemma_and_tts_smoke() -> None:
                 segment,
                 language=language.model_language,
                 instructions=voice.render(language.model_language),
+                ref_audio=ref_audio,
+                ref_text=ref_text,
                 cancelled=lambda: False,
             ):
                 frames.append(frame)

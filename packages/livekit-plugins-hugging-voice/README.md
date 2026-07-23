@@ -28,6 +28,8 @@ The constructor also accepts a bounded `base_urls` list, `token_file`, configura
 `aiohttp.ClientSession`, and LiveKit `APIConnectOptions`. Language and voice IDs are
 validated authoritatively by the service against its configured maps. Omitting
 language or voice inherits the defaults advertised by the connected service.
+Voice-style instructions apply only when the service runs the `voice_design`
+TTS mode; the default `voice_clone` mode keeps its frozen speaker identity.
 Environment fallbacks are
 `HUGGING_VOICE_BASE_URL` plus exactly one of `HUGGING_VOICE_TOKEN` or
 `HUGGING_VOICE_TOKEN_FILE`.

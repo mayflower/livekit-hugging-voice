@@ -43,8 +43,15 @@ data:
     speech:
       default_language: de
       default_voice: warm_female
+      # voice_clone drives the base talker with one frozen reference recording per
+      # voice and language (stable speaker identity across segments and sessions).
+      # voice_design rebuilds each voice from its description on every segment.
+      tts_mode: voice_clone
       generation:
-        do_sample: false
+        # do_sample matches the upstream Qwen3-TTS generation_config.json; greedy
+        # decoding drifts into near-silent output on long generations and
+        # frequently misses the end-of-speech token.
+        do_sample: true
         temperature: 0.9
         top_k: 50
         top_p: 1.0
@@ -66,24 +73,71 @@ data:
         it:
           model_language: Italian
           response_instruction: Respond in clear, natural Italian.
+      # refs point into the voice-reference recordings packaged with the service
+      # (speech.voice_ref_dir overrides the directory). Each recording was rendered
+      # once from the voice's VoiceDesign description and then frozen; the text is
+      # the exact transcript of the recording.
       voices:
         warm_female:
           instructions: >-
             A warm, approachable adult female native {language} speaker with authentic
             pronunciation and prosody, a calm conversational rhythm, and no foreign accent.
+          refs:
+            de:
+              audio: warm_female.de.wav
+              text: &ref_text_de >-
+                Willkommen bei unserem Sprachassistenten! Ich helfe dir gerne bei Fragen
+                rund um Technik, Alltag und Wissen, und zwar ganz natürlich im Gespräch.
+            en:
+              audio: warm_female.en.wav
+              text: &ref_text_en >-
+                Welcome to our voice assistant! I am happy to help you with questions about
+                technology, everyday life, and general knowledge, all in a natural conversation.
+            fr:
+              audio: warm_female.fr.wav
+              text: &ref_text_fr >-
+                Bienvenue chez votre assistant vocal ! Je vous aide volontiers pour toutes vos
+                questions sur la technique, la vie quotidienne et la culture générale, tout
+                naturellement, au fil de la conversation.
+            it:
+              audio: warm_female.it.wav
+              text: &ref_text_it >-
+                Benvenuti nel vostro assistente vocale! Vi aiuto volentieri con domande su
+                tecnologia, vita quotidiana e cultura generale, in modo del tutto naturale
+                durante la conversazione.
         clear_female:
           instructions: >-
             A clear, confident adult female native {language} speaker with precise natural
             pronunciation, balanced energy, and no foreign accent.
+          refs:
+            de: {audio: clear_female.de.wav, text: *ref_text_de}
+            en: {audio: clear_female.en.wav, text: *ref_text_en}
+            fr: {audio: clear_female.fr.wav, text: *ref_text_fr}
+            it: {audio: clear_female.it.wav, text: *ref_text_it}
         warm_male:
           instructions: >-
             A warm, reassuring adult male native {language} speaker with authentic
             pronunciation and prosody, a relaxed conversational rhythm, and no foreign accent.
+          refs:
+            de: {audio: warm_male.de.wav, text: *ref_text_de}
+            en: {audio: warm_male.en.wav, text: *ref_text_en}
+            fr: {audio: warm_male.fr.wav, text: *ref_text_fr}
+            it: {audio: warm_male.it.wav, text: *ref_text_it}
         clear_male:
           instructions: >-
             A clear, professional adult male native {language} speaker with precise natural
             pronunciation, steady pacing, and no foreign accent.
+          refs:
+            de: {audio: clear_male.de.wav, text: *ref_text_de}
+            en: {audio: clear_male.en.wav, text: *ref_text_en}
+            fr: {audio: clear_male.fr.wav, text: *ref_text_fr}
+            it: {audio: clear_male.it.wav, text: *ref_text_it}
         friendly_neutral:
           instructions: >-
             A friendly androgynous adult native {language} speaker with authentic natural
             pronunciation, expressive conversational prosody, and no foreign accent.
+          refs:
+            de: {audio: friendly_neutral.de.wav, text: *ref_text_de}
+            en: {audio: friendly_neutral.en.wav, text: *ref_text_en}
+            fr: {audio: friendly_neutral.fr.wav, text: *ref_text_fr}
+            it: {audio: friendly_neutral.it.wav, text: *ref_text_it}

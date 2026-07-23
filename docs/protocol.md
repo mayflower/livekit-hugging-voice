@@ -28,10 +28,12 @@ stereo, unsupported-rate, and oversized audio is invalid.
 ## Client events
 
 - `session.update`: bounded instructions, language code, public voice ID, optional
-  speaking-style instructions, fixed audio, bounded server-VAD values, interruption
-  and transcription switches. The service validates language and voice against its
-  configured maps; null or omitted language/voice values inherit its advertised
-  defaults, plus bounded strict function schemas and the session tool choice.
+  speaking-style instructions (applied in `voice_design` mode; the default
+  `voice_clone` mode's frozen speaker identity ignores them), fixed audio, bounded
+  server-VAD values, interruption and transcription switches. The service
+  validates language and voice against its configured maps; null or omitted
+  language/voice values inherit its advertised defaults, plus bounded strict
+  function schemas and the session tool choice.
   Model, raw speaker, reference-audio, path, and cloud fields are impossible.
 - `input_audio_buffer.append`: ordered PCM16 chunk with a non-negative sequence.
 - `input_audio_buffer.commit` and `input_audio_buffer.clear`: explicit server-known
@@ -45,7 +47,9 @@ stereo, unsupported-rate, and oversized audio is invalid.
 ## Server events
 
 - `session.created` reports fixed model IDs, exact local revisions, configured
-  default language/voice, supported language/voice IDs, and sample rates.
+  default language/voice, supported language/voice IDs, sample rates, and the
+  active `tts_mode` (voice-style instructions are honored only in
+  `voice_design`).
 - `session.updated` acknowledges the exact `session.update` source event.
 - `conversation.item.created` acknowledges durable in-session context acceptance.
 - `error` contains a bounded structured code/message, retryability, and optional

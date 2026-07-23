@@ -2,6 +2,24 @@
 
 ## 0.2.0 - unreleased
 
+- Make `voice_clone` the default TTS mode: the Qwen3-TTS base talker speaks the
+  five public voice profiles from frozen, operator-defined reference recordings
+  (one per voice and language, packaged with the service), keeping each speaker
+  identity stable across segments and sessions. `speech.tts_mode: voice_design`
+  restores the previous description-driven behavior.
+- Default TTS decoding to sampling (`speech.generation.do_sample: true`),
+  matching the upstream Qwen3-TTS `generation_config.json`; greedy decoding
+  drifted into near-silent output and missed the end-of-speech token on long
+  generations.
+- Add `benchmarks/generate_voice_refs.py` to render, check, and document the
+  frozen reference recordings with full provenance.
+- Advertise the active `tts_mode` in `session.created` so clients can tell
+  that voice-style instructions apply only to `voice_design`.
+- Upgrading requires re-running the model prefetch: the lock must include the
+  new `qwen-talker-1.7b-base-BF16.gguf` before the service can start. The
+  VoiceDesign talker left the shipped manifest; operators who run
+  `voice_design` add its file entry back and prefetch again.
+
 - Add native LiveKit Agents function calling with LiveKit as the sole tool executor.
 - Add strict WebSocket protocol v2 schemas, per-response tool choice, typed
   call/result items, acknowledgements, fixed llama.cpp slot affinity, and cache reuse.

@@ -55,16 +55,20 @@ slot to `idle`.
 
 - Public language codes map to Qwen model-language names and LLM response
   instructions in `speech.languages`.
-- Public voice IDs map to fixed Qwen VoiceDesign descriptions in `speech.voices`.
+- Public voice IDs map to fixed Qwen voice profiles in `speech.voices`: a
+  VoiceDesign description plus one frozen reference recording per language for
+  the default `voice_clone` mode (`speech.tts_mode`).
 - A session selects a configured language and voice and may append a bounded style
-  instruction. The mandatory native-language design remains operator-controlled.
+  instruction (honored in `voice_design` mode). The mandatory native-language
+  profile and all reference recordings remain operator-controlled.
 - The shipped defaults are `de` and `warm_female`; four languages and five profiles
   are allowlisted.
 
 ## Fixed decisions
 
 - Models: Silero VAD, Parakeet TDT 0.6B v3, Gemma 4 31B IT, Qwen3-TTS 1.7B
-  VoiceDesign.
+  (base talker for the default `voice_clone` mode, shared codec; the VoiceDesign
+  talker is an optional manifest entry for `voice_design`).
 - Internal transport: authenticated bounded WebSocket carrying JSON and PCM16.
 - Packaging: a small protocol library, the LiveKit plugin wheel, and the GPU service
   image.

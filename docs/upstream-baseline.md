@@ -68,9 +68,10 @@ priority for final jobs, and droppable opportunistic partials.
 audio chunks, and observes the cancellation generation. This project fixes
 `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` and one shared non-reentrant runtime while
 letting an operator map bounded public voice/language IDs to fixed design
-descriptions. It excludes reference audio, cloning, and raw client-selected
-descriptions or path input. This is a later product decision; the pinned upstream
-behavior analysis itself is unchanged.
+descriptions. It excludes client-provided reference audio and raw client-selected
+descriptions or path input; since version 0.2 the operator-defined `voice_clone`
+mode (frozen packaged reference recordings) is the default. These are later
+product decisions; the pinned upstream behavior analysis itself is unchanged.
 
 ### Upstream behavior intentionally excluded
 

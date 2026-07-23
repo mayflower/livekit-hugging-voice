@@ -8,6 +8,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
+from pathlib import Path
 from typing import Protocol
 
 from ..cancellation import GenerationToken
@@ -21,6 +22,8 @@ class TTSRuntime(Protocol):
         *,
         language: str,
         instructions: str,
+        ref_audio: Path | None,
+        ref_text: str | None,
         cancelled: Callable[[], bool],
     ) -> AsyncIterator[bytes]: ...
 
@@ -37,6 +40,8 @@ class TTSJob:
     instructions: str
     is_current: Callable[[], bool]
     on_frame: Callable[[bytes], Awaitable[None]]
+    ref_audio: Path | None = None
+    ref_text: str | None = None
     enqueued_at: float = field(default_factory=time.monotonic)
     future: asyncio.Future[None] | None = None
 
@@ -135,6 +140,8 @@ class TTSScheduler:
                         job.text,
                         language=job.language,
                         instructions=job.instructions,
+                        ref_audio=job.ref_audio,
+                        ref_text=job.ref_text,
                         cancelled=partial(_job_cancelled, job),
                     ):
                         if not job.is_current():

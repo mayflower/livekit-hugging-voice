@@ -5,8 +5,10 @@ These instructions are normative for every change in this repository. Read
 baseline once in `docs/upstream-baseline.md`; later waves inspect only files
 relevant to their concrete change and do not repeat a general upstream survey.
 For the native tool-calling work, also read `prompt.md`. The no-tool boundaries
-in the historical version-0.1 `prompts.md` are superseded by this file and
-`prompt.md`; all other architecture and delivery constraints remain in force.
+and the no-voice-cloning boundary in the historical version-0.1 `prompts.md` are
+superseded by this file (tool calling by `prompt.md`, voice cloning by the
+operator-defined `voice_clone` form described below); all other architecture and
+delivery constraints remain in force.
 
 ## Product boundary
 
@@ -32,20 +34,26 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
 - There is no second tool executor, planner, router, tool LLM, built-in
   `llama.cpp` tool, `llama.cpp` MCP proxy, or parsing of visible text, XML, or
   Markdown as a substitute for structured function calls.
-- There is no mAIstack, FastEnhancer, DeepFilterNet, voice cloning, reference
+- There is no mAIstack, FastEnhancer, DeepFilterNet, client-provided reference
   audio, arbitrary client-provided voice design, camera, service-side web search,
   database, Redis, broker, operator, Helm, service-mesh requirement, or generic
-  provider/backend registry.
+  provider/backend registry. Voice cloning exists only in the operator-defined
+  form described below: frozen reference recordings shipped with the service.
 - There is no cloud LLM, cloud fallback, silent CPU fallback, model downgrade,
   runtime download, `torch.hub` access, or movable model/Git/image pin.
 - Gemma is `google/gemma-4-31B-it`, locally quantized for llama.cpp. Never replace
   it with E4B. Parakeet is `nvidia/parakeet-tdt-0.6b-v3`; TTS is
   `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
 - Public languages are `de`, `en`, `fr`, and `it`. Public voices are five fixed,
-  operator-defined VoiceDesign profiles: `warm_female`, `clear_female`,
-  `warm_male`, `clear_male`, and `friendly_neutral`. Clients may add bounded style
-  instructions but cannot submit model names, paths, reference audio, or arbitrary
-  base voice designs.
+  operator-defined profiles: `warm_female`, `clear_female`, `warm_male`,
+  `clear_male`, and `friendly_neutral`. The default `voice_clone` TTS mode speaks
+  every profile through the Qwen3-TTS base talker from one frozen, operator-defined
+  reference recording per voice and language, so the perceived speaker stays
+  identical across segments and sessions; the recordings were rendered once from
+  the VoiceDesign descriptions and are packaged with the service. The `voice_design`
+  mode rebuilds each voice from its description on every segment. Clients may add
+  bounded style instructions (honored only in `voice_design` mode) but cannot
+  submit model names, paths, reference audio, or arbitrary base voice designs.
 
 ## Runtime invariants
 

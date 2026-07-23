@@ -72,6 +72,12 @@ def test_real_manifest_has_exact_revisions_and_expected_models() -> None:
     assert all(len(model.revision) == 40 for model in hf_models)
     gemma = next(model for model in hf_models if model.id == "google/gemma-4-31B-it")
     assert [file.path for file in gemma.files] == ["gemma-4-31B-it-Q4_0.gguf"]
+    qwen = next(model for model in hf_models if model.id == "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign")
+    # The shipped manifest must cover the default voice_clone mode.
+    assert [file.path for file in qwen.files] == [
+        "qwen-talker-1.7b-base-BF16.gguf",
+        "qwen-tokenizer-12hz-BF16.gguf",
+    ]
 
 
 def test_prefetch_writes_atomic_lock_and_offline_verify_detects_changes(tmp_path: Path) -> None:

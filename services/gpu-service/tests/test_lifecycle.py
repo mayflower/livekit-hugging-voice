@@ -3,12 +3,19 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib.metadata
+import wave
 from pathlib import Path
+from typing import Literal
 
 import httpx
 import pytest
 from hugging_voice_service.app import create_app
-from hugging_voice_service.config import ModelSettings, ServerSettings, ServiceSettings
+from hugging_voice_service.config import (
+    ModelSettings,
+    ServerSettings,
+    ServiceSettings,
+    SpeechSettings,
+)
 from hugging_voice_service.lifecycle import LifecyclePhase, ServiceLifecycle
 from hugging_voice_service.llama_process import LlamaProcessState
 from hugging_voice_service.model_manifest import LockedFile, LockedModel, ModelLock, render_lock
@@ -107,6 +114,12 @@ def make_settings_and_lock(tmp_path: Path) -> ServiceSettings:
                 locked_file(
                     root,
                     "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+                    "qwen-talker-1.7b-base-BF16.gguf",
+                    b"base-talker",
+                ),
+                locked_file(
+                    root,
+                    "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
                     "qwen-talker-1.7b-voicedesign-BF16.gguf",
                     b"talker",
                 ),
@@ -134,6 +147,7 @@ def make_settings_and_lock(tmp_path: Path) -> ServiceSettings:
     binary.write_bytes(b"binary")
     token_file = tmp_path / "token"
     token_file.write_text("test-secret", encoding="utf-8")
+    speech = SpeechSettings(voice_ref_dir=write_voice_refs(tmp_path / "voice-refs"))
     return ServiceSettings(
         server=ServerSettings(token_file=token_file),
         models=ModelSettings(
@@ -141,7 +155,21 @@ def make_settings_and_lock(tmp_path: Path) -> ServiceSettings:
             lock_file=lock_path,
             llama_server_binary=binary,
         ),
+        speech=speech,
     )
+
+
+def write_voice_refs(directory: Path) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    speech = SpeechSettings()
+    for voice in speech.voices.values():
+        for reference in voice.refs.values():
+            with wave.open(str(directory / reference.audio), "wb") as recording:
+                recording.setnchannels(1)
+                recording.setsampwidth(2)
+                recording.setframerate(24_000)
+                recording.writeframes(bytes(4_800))
+    return directory
 
 
 @pytest.mark.asyncio
@@ -332,3 +360,80 @@ async def test_unexpected_llama_exit_immediately_revokes_readiness(
     assert not lifecycle.ready
     assert lifecycle.error == llama.failure
     await lifecycle.aclose()
+
+
+@pytest.mark.asyncio
+async def test_missing_voice_reference_fails_before_any_model_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(importlib.metadata, "version", lambda package: "6.2.1")
+    settings = make_settings_and_lock(tmp_path)
+    (tmp_path / "voice-refs" / "warm_female.de.wav").unlink()
+
+    def forbidden_probe() -> None:
+        raise AssertionError("CUDA probe must not run when a voice reference is missing")
+
+    lifecycle = ServiceLifecycle(settings, cuda_probe=forbidden_probe)
+    await lifecycle.start()
+    assert lifecycle.phase is LifecyclePhase.FAILED
+    assert "voice reference" in (lifecycle.error or "")
+    assert "warm_female/de" in (lifecycle.error or "")
+
+
+@pytest.mark.asyncio
+async def test_corrupt_voice_reference_fails_before_any_model_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(importlib.metadata, "version", lambda package: "6.2.1")
+    settings = make_settings_and_lock(tmp_path)
+    (tmp_path / "voice-refs" / "warm_male.en.wav").write_bytes(b"not a riff wav")
+
+    def forbidden_probe() -> None:
+        raise AssertionError("CUDA probe must not run when a voice reference is corrupt")
+
+    lifecycle = ServiceLifecycle(settings, cuda_probe=forbidden_probe)
+    await lifecycle.start()
+    assert lifecycle.phase is LifecyclePhase.FAILED
+    assert "voice reference" in (lifecycle.error or "")
+
+
+@pytest.mark.asyncio
+async def test_talker_artifact_follows_the_configured_tts_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(importlib.metadata, "version", lambda package: "6.2.1")
+
+    async def selected_talker(mode: Literal["voice_clone", "voice_design"]) -> str:
+        base = make_settings_and_lock(tmp_path / mode)
+        settings = base.model_copy(
+            update={
+                "speech": SpeechSettings(
+                    voice_ref_dir=write_voice_refs(tmp_path / mode / "voice-refs"),
+                    tts_mode=mode,
+                )
+            }
+        )
+        seen: list[Path] = []
+
+        def qwen_factory(
+            talker: Path, codec: Path, speech: SpeechSettings, seen: list[Path] = seen
+        ) -> FakeBlockingRuntime:
+            seen.append(talker)
+            return FakeBlockingRuntime()
+
+        lifecycle = ServiceLifecycle(
+            settings,
+            cuda_probe=lambda: None,
+            llama_factory=lambda binary, model, config: FakeLlama(),
+            parakeet_factory=lambda checkpoint: FakeBlockingRuntime(),
+            qwen_factory=qwen_factory,
+            gemma_factory=lambda port, violation: FakeGemma(),
+            gpu_memory_probe=lambda: 0,
+        )
+        await lifecycle.start()
+        assert lifecycle.ready, lifecycle.error
+        await lifecycle.aclose()
+        return seen[0].name
+
+    assert await selected_talker("voice_clone") == "qwen-talker-1.7b-base-BF16.gguf"
+    assert await selected_talker("voice_design") == "qwen-talker-1.7b-voicedesign-BF16.gguf"

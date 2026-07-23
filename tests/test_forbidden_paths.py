@@ -19,13 +19,40 @@ def production_python() -> list[Path]:
 
 def test_production_has_no_forbidden_provider_or_runtime_paths() -> None:
     forbidden = re.compile(
-        r"maistack|fastenhancer|deepfilternet|aiortc|webrtc|voice[ _-]clon(?:e|ing)|"
+        r"maistack|fastenhancer|deepfilternet|aiortc|webrtc|"
         r"torch\.hub|from_pretrained|openai.{0,30}realtime|realtime.{0,30}openai|\be4b\b",
         re.IGNORECASE,
     )
     findings = [
         f"{path.relative_to(REPO_ROOT)}:{line_number}:{line.strip()}"
         for path in production_python()
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if forbidden.search(line)
+    ]
+    assert findings == []
+
+
+def test_clients_cannot_carry_reference_audio() -> None:
+    """Voice cloning is operator-defined only: the wire protocol, the LiveKit
+    plugin, and the example worker must stay free of reference-audio inputs.
+    (Naming the mode — e.g. the informational ``tts_mode`` field — is fine;
+    carrying reference audio or transcripts is not.)"""
+
+    client_roots = (
+        REPO_ROOT / "packages/livekit-plugins-hugging-voice/livekit",
+        REPO_ROOT / "packages/hugging-voice-protocol/src",
+        REPO_ROOT / "examples/minimal-livekit-agent",
+    )
+    forbidden = re.compile(
+        r"ref[_ -]?audio|ref[_ -]?text|reference[ _-]recording",
+        re.IGNORECASE,
+    )
+    for root in client_roots:
+        assert root.is_dir(), f"client root moved: {root}"
+    findings = [
+        f"{path.relative_to(REPO_ROOT)}:{line_number}:{line.strip()}"
+        for root in client_roots
+        for path in root.rglob("*.py")
         for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
         if forbidden.search(line)
     ]

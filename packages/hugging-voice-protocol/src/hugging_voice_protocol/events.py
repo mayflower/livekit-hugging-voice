@@ -349,6 +349,10 @@ class SessionCreatedEvent(EventBase):
     )
     input_sample_rate: Literal[16_000] = 16_000
     output_sample_rate: Literal[24_000] = 24_000
+    # Informational: voice_clone speaks from frozen operator-defined
+    # recordings; per-session voice-style instructions apply only in
+    # voice_design. Clients cannot influence or submit recordings.
+    tts_mode: Literal["voice_clone", "voice_design"] = "voice_clone"
     llama_slot_id: Literal[0, 1] = 0
 
 
