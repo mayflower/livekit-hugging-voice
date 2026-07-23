@@ -223,6 +223,20 @@ async def test_missing_cuda_fails_before_any_model_constructor(
     assert constructed == 0
     assert not lifecycle.ready
 
+    realtime = RealtimeService(lifecycle)
+    app = create_app(settings, lifecycle=lifecycle, realtime=realtime)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/health/ready")
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "not_ready",
+            "phase": LifecyclePhase.FAILED.value,
+        }
+        assert "CUDA unavailable" not in response.text
+
 
 @pytest.mark.asyncio
 async def test_missing_auth_secret_fails_before_model_verification(tmp_path: Path) -> None:

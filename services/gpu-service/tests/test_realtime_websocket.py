@@ -481,6 +481,15 @@ def test_draining_service_rejects_new_sessions_with_1012(tmp_path: Path) -> None
 
 def test_third_connection_is_structurally_rejected_without_a_wait_queue(tmp_path: Path) -> None:
     service = make_ready_service(tmp_path)
+    original_vad_factory = service._vad_factory
+    vad_constructions = 0
+
+    def counted_vad_factory() -> SessionVAD:
+        nonlocal vad_constructions
+        vad_constructions += 1
+        return original_vad_factory()
+
+    service._vad_factory = counted_vad_factory
     with TestClient(make_test_app(service)) as client:
         with client.websocket_connect(
             "/v1/realtime",
@@ -505,6 +514,7 @@ def test_third_connection_is_structurally_rejected_without_a_wait_queue(tmp_path
                         third.receive_json()
                     except WebSocketDisconnect as exc:
                         assert exc.code == 4429
+                    assert vad_constructions == 2
             with client.websocket_connect(
                 "/v1/realtime",
                 headers=headers(),

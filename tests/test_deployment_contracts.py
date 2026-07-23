@@ -71,7 +71,7 @@ def test_headless_discovery_and_no_autoscaling_objects() -> None:
     assert "PodDisruptionBudget" not in kinds
 
 
-def test_delivery_files_have_no_latest_or_embedded_model_copy() -> None:
+def test_delivery_files_use_immutable_images_and_have_no_embedded_model_copy() -> None:
     files = [
         REPO_ROOT / "services/gpu-service/Dockerfile",
         REPO_ROOT / "examples/minimal-livekit-agent/Dockerfile",
@@ -80,6 +80,21 @@ def test_delivery_files_have_no_latest_or_embedded_model_copy() -> None:
     text = "\n".join(path.read_text(encoding="utf-8") for path in files)
     assert ":latest" not in text
     dockerfile = (REPO_ROOT / "services/gpu-service/Dockerfile").read_text(encoding="utf-8")
+    image_lines = [
+        line.strip()
+        for path in files[:2]
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("FROM ")
+        or (
+            line.strip().startswith("COPY --from=")
+            and any(separator in line.strip().split()[1] for separator in ("/", ":"))
+        )
+    ]
+    assert image_lines
+    assert all("@sha256:" in line for line in image_lines)
+    production = load_yaml("deploy/kubernetes/overlays/production/kustomization.yaml")
+    assert "newTag" not in production["images"][0]
+    assert production["images"][0]["digest"].startswith("sha256:")
     assert "COPY .models" not in dockerfile
     assert "COPY models/manifest.lock.json" not in dockerfile
     assert "HF_HUB_OFFLINE=1" in dockerfile

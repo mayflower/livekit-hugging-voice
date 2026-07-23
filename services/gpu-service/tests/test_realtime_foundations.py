@@ -201,6 +201,35 @@ class StuckPipeline:
         await asyncio.Event().wait()
 
 
+class FailingPipeline:
+    async def drain(self) -> None:
+        raise RuntimeError("drain failed")
+
+
+class DelayedPipeline:
+    async def drain(self) -> None:
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_vad_construction_failure_returns_claimed_capacity() -> None:
+    capacity = CapacityManager(1, telemetry=ServiceTelemetry())
+    registry = SessionRegistry(capacity, drain_timeout=1.0)
+
+    def fail_vad_construction() -> SessionVAD:
+        raise RuntimeError("VAD construction failed")
+
+    with pytest.raises(RuntimeError, match="VAD construction failed"):
+        await registry.create(
+            session_id="session_vad_failure",
+            transport=cast(SessionTransport, NoopTransport()),
+            vad_factory=fail_vad_construction,
+        )
+
+    assert not await registry.states()
+    assert (await capacity.report())["available"] == 1
+
+
 @pytest.mark.asyncio
 async def test_release_timeout_quarantines_slot_instead_of_reusing_it() -> None:
     capacity = CapacityManager(1, telemetry=ServiceTelemetry())
@@ -208,7 +237,7 @@ async def test_release_timeout_quarantines_slot_instead_of_reusing_it() -> None:
     state = await registry.create(
         session_id="session_stuck",
         transport=cast(SessionTransport, NoopTransport()),
-        vad=cast(SessionVAD, object()),
+        vad_factory=lambda: cast(SessionVAD, object()),
     )
     assert state is not None
     state.pipeline = StuckPipeline()
@@ -218,6 +247,68 @@ async def test_release_timeout_quarantines_slot_instead_of_reusing_it() -> None:
     assert report["stuck"] == 1
     assert report["available"] == 0
     assert await capacity.claim("session_replacement") is None
+
+
+@pytest.mark.asyncio
+async def test_successful_release_does_not_retain_tasks_and_remains_idempotent() -> None:
+    capacity = CapacityManager(1, telemetry=ServiceTelemetry())
+    registry = SessionRegistry(capacity, drain_timeout=1.0)
+    state = await registry.create(
+        session_id="session_released",
+        transport=cast(SessionTransport, NoopTransport()),
+        vad_factory=lambda: cast(SessionVAD, object()),
+    )
+    assert state is not None
+
+    assert await registry.release(state)
+    assert await registry.release(state)
+    assert not registry._releases
+    assert (await capacity.report())["available"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_release_waiter_does_not_retain_completed_task() -> None:
+    capacity = CapacityManager(1, telemetry=ServiceTelemetry())
+    registry = SessionRegistry(capacity, drain_timeout=1.0)
+    state = await registry.create(
+        session_id="session_cancelled_waiter",
+        transport=cast(SessionTransport, NoopTransport()),
+        vad_factory=lambda: cast(SessionVAD, object()),
+    )
+    assert state is not None
+    state.pipeline = DelayedPipeline()
+
+    waiter = asyncio.create_task(registry.release(state))
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    await asyncio.sleep(0.02)
+
+    assert not registry._releases
+    assert (await capacity.report())["available"] == 1
+
+
+@pytest.mark.asyncio
+async def test_release_failure_quarantines_slot_and_drops_completed_task(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    capacity = CapacityManager(1, telemetry=ServiceTelemetry())
+    registry = SessionRegistry(capacity, drain_timeout=1.0)
+    state = await registry.create(
+        session_id="session_failed",
+        transport=cast(SessionTransport, NoopTransport()),
+        vad_factory=lambda: cast(SessionVAD, object()),
+    )
+    assert state is not None
+    state.pipeline = FailingPipeline()
+
+    assert not await registry.release(state)
+    assert not registry._releases
+    report = await capacity.report()
+    assert report["stuck"] == 1
+    assert report["available"] == 0
+    assert "session_drain_failed" in caplog.text
 
 
 def test_telemetry_exports_every_required_wave_three_metric() -> None:

@@ -4,7 +4,7 @@ ARG CUDA_VERSION=12.8.1
 ARG UBUNTU_VERSION=24.04
 ARG PYTHON_VERSION=3.11.13
 
-FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION} AS llama-builder
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION}@sha256:3986465b3dd3b4d602c07061f2cff417e0bfb24810129408d4eb12e111015a6c AS llama-builder
 ARG LLAMA_CPP_COMMIT=3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -30,7 +30,7 @@ RUN git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git \
     && cmake --build build --target llama-server --parallel "$(nproc)" \
     && strip build/bin/llama-server
 
-FROM ubuntu:${UBUNTU_VERSION} AS python-builder
+FROM ubuntu:${UBUNTU_VERSION}@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf AS python-builder
 ARG PYTHON_VERSION
 ARG PYTHON_SOURCE_SHA256=0f1a22f4dfd34595a29cf69ee7ea73b9eff8b1cc89d7ab29b3ab0ec04179dad8
 RUN apt-get update \
@@ -58,7 +58,7 @@ RUN rm -rf \
     /opt/python/lib/python3.11/sqlite3/test \
     /opt/python/lib/python3.11/tkinter/test \
     /opt/python/lib/python3.11/unittest/test
-COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.11.7@sha256:733b4042187702f832f7fdecb3aff14a61b288c4ca37af188bb5715c1caebaf8 /uv /usr/local/bin/uv
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \
@@ -70,7 +70,7 @@ COPY packages/hugging-voice-protocol ./packages/hugging-voice-protocol
 COPY services/gpu-service ./services/gpu-service
 RUN uv sync --package hugging-voice-gpu-service --extra gpu --frozen --no-dev --no-editable
 
-FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION} AS runtime
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu${UBUNTU_VERSION}@sha256:9175fa92f96de35a8cfb9493f0dfcf9435c7a597e9d95ad41d2cae382a95e3f9 AS runtime
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates libbz2-1.0 libexpat1 libffi8 libgfortran5 libgomp1 liblzma5 \

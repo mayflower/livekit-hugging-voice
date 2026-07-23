@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
@@ -20,6 +22,8 @@ from .cancellation import GenerationCancellation
 from .capacity import CapacityManager, SessionSlot
 from .conversation import Conversation
 from .runtimes.silero import SessionVAD
+
+logger = logging.getLogger(__name__)
 
 
 class SessionLifecycle(StrEnum):
@@ -140,11 +144,16 @@ class SessionRegistry:
         *,
         session_id: str,
         transport: SessionTransport,
-        vad: SessionVAD,
+        vad_factory: Callable[[], SessionVAD],
     ) -> SessionState | None:
         slot = await self.capacity.claim(session_id)
         if slot is None:
             return None
+        try:
+            vad = vad_factory()
+        except Exception:
+            await self.capacity.complete_release(slot, drained=True)
+            raise
         state = SessionState(session_id=session_id, slot=slot, transport=transport, vad=vad)
         async with self._changed:
             self._sessions[session_id] = state
@@ -157,6 +166,10 @@ class SessionRegistry:
 
     async def release(self, state: SessionState) -> bool:
         async with self._lock:
+            if state.lifecycle is SessionLifecycle.CLOSED:
+                return True
+            if state.lifecycle is SessionLifecycle.STUCK:
+                return False
             task = self._releases.get(state.session_id)
             if task is None:
                 task = asyncio.create_task(self._release_once(state))
@@ -164,25 +177,40 @@ class SessionRegistry:
         return await asyncio.shield(task)
 
     async def _release_once(self, state: SessionState) -> bool:
-        state.lifecycle = SessionLifecycle.DRAINING
-        await self.capacity.begin_release(state.slot)
-        drained = False
         try:
-            if state.pipeline is not None:
-                await asyncio.wait_for(state.pipeline.drain(), timeout=self._drain_timeout)
-            drained = True
-        except TimeoutError:
-            state.lifecycle = SessionLifecycle.STUCK
-        await self.capacity.complete_release(state.slot, drained=drained)
-        if drained:
-            state.lifecycle = SessionLifecycle.CLOSED
-            async with self._changed:
-                self._sessions.pop(state.session_id, None)
-                self._changed.notify_all()
-        else:
-            async with self._changed:
-                self._changed.notify_all()
-        return drained
+            state.lifecycle = SessionLifecycle.DRAINING
+            await self.capacity.begin_release(state.slot)
+            drained = False
+            try:
+                if state.pipeline is not None:
+                    await asyncio.wait_for(state.pipeline.drain(), timeout=self._drain_timeout)
+                drained = True
+            except TimeoutError:
+                state.lifecycle = SessionLifecycle.STUCK
+            except Exception as exc:
+                state.lifecycle = SessionLifecycle.STUCK
+                logger.error(
+                    "session_drain_failed",
+                    extra={
+                        "session_id": state.session_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+            await self.capacity.complete_release(state.slot, drained=drained)
+            if drained:
+                state.lifecycle = SessionLifecycle.CLOSED
+                async with self._changed:
+                    self._sessions.pop(state.session_id, None)
+                    self._changed.notify_all()
+            else:
+                async with self._changed:
+                    self._changed.notify_all()
+            return drained
+        finally:
+            task = asyncio.current_task()
+            async with self._lock:
+                if self._releases.get(state.session_id) is task:
+                    self._releases.pop(state.session_id)
 
     async def states(self) -> tuple[SessionState, ...]:
         async with self._lock:

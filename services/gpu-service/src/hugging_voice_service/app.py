@@ -74,7 +74,6 @@ def create_app(
             content={
                 "status": "ready" if status == 200 else "not_ready",
                 "phase": service_lifecycle.phase,
-                "error": service_lifecycle.error,
             },
         )
 

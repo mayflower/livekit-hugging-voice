@@ -275,7 +275,7 @@ class RealtimeService:
         state = await self.registry.create(
             session_id=session_id,
             transport=transport,
-            vad=self._vad_factory(),
+            vad_factory=self._vad_factory,
         )
         if state is None:
             await self._send_transport_error(

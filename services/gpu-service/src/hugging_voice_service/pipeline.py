@@ -160,7 +160,7 @@ class VoicePipeline:
         self._response: ResponseContext | None = None
         self._response_task: asyncio.Task[None] | None = None
         self._partial_task: asyncio.Task[None] | None = None
-        self._completed_turns: set[tuple[str, int]] = set()
+        self._completed_turn: tuple[str, int] | None = None
         self._draining = False
         self._speech_stopped_at: float | None = None
         self._response_idle = asyncio.Event()
@@ -420,9 +420,9 @@ class VoicePipeline:
         end_sample: int,
     ) -> None:
         turn_key = (turn_id, revision)
-        if turn_key in self._completed_turns:
+        if turn_key == self._completed_turn:
             return
-        self._completed_turns.add(turn_key)
+        self._completed_turn = turn_key
         self.state.partial_epoch += 1
         if self._partial_task is not None:
             self._partial_task.cancel()

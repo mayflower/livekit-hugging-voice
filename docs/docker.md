@@ -119,8 +119,9 @@ Relevant Compose controls are:
 - `LIVEKIT_PUBLIC_URL` to bypass the same-origin signaling proxy and give the UI
   an existing `ws://` or `wss://` LiveKit endpoint.
 
-The optional overlay pins `livekit/livekit-server:v1.13.4`. For a release, resolve
-and record manifest digests before build; do not replace pinned tags with `latest`:
+The optional overlay pins the amd64 `livekit/livekit-server:v1.13.4` manifest by
+digest. For a release, resolve and record every architecture-specific manifest
+digest before build; never replace digest-bound references with movable tags:
 
 ```bash
 make image-digests
