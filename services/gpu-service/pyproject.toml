@@ -31,7 +31,7 @@ gpu = [
   "silero-vad==6.2.1",
   "torch==2.10.0",
   "torchaudio==2.10.0",
-  "transformers==4.57.3",
+  "transformers==5.5.0",
 ]
 
 [project.scripts]
