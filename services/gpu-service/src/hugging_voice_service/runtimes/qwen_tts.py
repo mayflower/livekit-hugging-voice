@@ -123,7 +123,7 @@ def _load_local_cuda_graph_model(model_dir: Path) -> CudaGraphQwenModel:
 def _inference_mode() -> AbstractContextManager[Any]:
     import torch
 
-    return torch.inference_mode()
+    return cast(AbstractContextManager[Any], torch.inference_mode())
 
 
 def _next_item(iterator: Iterator[Any]) -> tuple[bool, Any | None]:

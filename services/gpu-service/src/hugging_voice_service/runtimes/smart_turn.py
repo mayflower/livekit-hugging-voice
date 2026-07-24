@@ -28,7 +28,7 @@ class SmartTurnRuntime:
     def load(self) -> None:
         if self._session is not None:
             return
-        import onnxruntime as ort  # type: ignore[import-untyped]
+        import onnxruntime as ort
         from transformers import WhisperFeatureExtractor
 
         options = ort.SessionOptions()
@@ -43,9 +43,7 @@ class SmartTurnRuntime:
         )
         if self._session.get_providers() != ["CPUExecutionProvider"]:
             raise RuntimeError("Smart Turn must use only CPUExecutionProvider")
-        self._feature_extractor = WhisperFeatureExtractor(  # type: ignore[no-untyped-call]
-            chunk_length=SMART_TURN_WINDOW_SECONDS
-        )
+        self._feature_extractor = WhisperFeatureExtractor(chunk_length=SMART_TURN_WINDOW_SECONDS)
         self.load_count += 1
 
     def warmup(self) -> None:

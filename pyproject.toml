@@ -86,3 +86,13 @@ module = [
   "torch.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = [
+  "onnxruntime",
+  "onnxruntime.*",
+  "transformers",
+  "transformers.*",
+]
+follow_imports = "skip"
+ignore_missing_imports = true
