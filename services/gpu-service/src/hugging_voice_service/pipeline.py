@@ -1,4 +1,4 @@
-"""Per-session realtime VAD -> STT -> Gemma -> TTS orchestration."""
+"""Per-session VAD -> semantic endpoint -> STT -> LLM -> TTS orchestration."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ from hugging_voice_protocol.events import (
 )
 
 from .cancellation import GenerationToken
-from .config import SpeechSettings, TranscriptionSettings
+from .config import SemanticTurnSettings, SpeechSettings, TranscriptionSettings
 from .conversation import (
     ConversationRole,
     FunctionCallEntry,
@@ -63,8 +63,10 @@ from .runtimes.llama_cpp_chat import (
     ToolCall,
     ToolCallValidationError,
 )
+from .runtimes.smart_turn import SmartTurnResult
 from .schedulers.stt import STTJob
 from .schedulers.tts import TTSJob, TTSPriority
+from .schedulers.turn import TurnJob
 from .sessions import SessionState
 from .telemetry import ServiceTelemetry
 from .text_segmenter import SpeechTextSegmenter
@@ -113,6 +115,14 @@ class TTSScheduling(Protocol):
     async def wait_session_idle(self, session_id: str) -> None: ...
 
 
+class TurnScheduling(Protocol):
+    async def submit(self, job: TurnJob) -> SmartTurnResult | None: ...
+
+    async def cancel_session(self, session_id: str) -> None: ...
+
+    async def wait_session_idle(self, session_id: str) -> None: ...
+
+
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
@@ -136,6 +146,7 @@ class ResponseContext:
     tool_choice: ToolChoice
     started_at: float
     speech_stopped_at: float | None
+    speech_ended_at: float | None
     direct_speak: bool = False
     text: str = ""
     audio_sequence: int = 0
@@ -153,6 +164,7 @@ class CompletedTurn:
     audio: bytes
     transcription_enabled: bool
     speech_stopped_at: float
+    speech_ended_at: float
 
 
 class VoicePipeline:
@@ -167,6 +179,8 @@ class VoicePipeline:
         gemma: GemmaStreamer,
         speech: SpeechSettings,
         transcription: TranscriptionSettings | None = None,
+        semantic_turn: SemanticTurnSettings | None = None,
+        turn_scheduler: TurnScheduling | None = None,
         telemetry: ServiceTelemetry,
     ) -> None:
         self.state = state
@@ -175,11 +189,19 @@ class VoicePipeline:
         self._gemma = gemma
         self._speech = speech
         self._transcription = transcription or TranscriptionSettings()
+        self._semantic_turn = semantic_turn or SemanticTurnSettings(mode="fixed_silence")
+        self._turn_scheduler = turn_scheduler
+        if self._semantic_turn.mode == "smart_turn_v3" and turn_scheduler is None:
+            raise ValueError("smart_turn_v3 requires a turn scheduler")
         self._telemetry = telemetry
         self._response: ResponseContext | None = None
         self._response_task: asyncio.Task[None] | None = None
         self._deferred_response_task: asyncio.Task[None] | None = None
         self._partial_task: asyncio.Task[None] | None = None
+        self._turn_candidate_task: asyncio.Task[None] | None = None
+        self._turn_fallback_task: asyncio.Task[None] | None = None
+        self._turn_candidate_id = 0
+        self._vad_progress = asyncio.Event()
         self._prefill_task: asyncio.Task[int] | None = None
         self._prefill_key: str | None = None
         self._generation_started = False
@@ -192,6 +214,7 @@ class VoicePipeline:
         self._turns_idle.set()
         self._draining = False
         self._speech_stopped_at: float | None = None
+        self._speech_ended_at: float | None = None
         self._response_idle = asyncio.Event()
         self._response_idle.set()
         state.pipeline = self
@@ -257,6 +280,7 @@ class VoicePipeline:
             return
         self._draining = True
         self.state.partial_epoch += 1
+        await self._cancel_turn_detection()
         if self._partial_task is not None:
             self._partial_task.cancel()
             await asyncio.gather(self._partial_task, return_exceptions=True)
@@ -282,6 +306,9 @@ class VoicePipeline:
         await self._cancel_response(reason=ResponseReason.TRANSPORT_ERROR)
         await self._stt.cancel_session(self.state.session_id)
         await self._stt.wait_session_idle(self.state.session_id)
+        if self._turn_scheduler is not None:
+            await self._turn_scheduler.cancel_session(self.state.session_id)
+            await self._turn_scheduler.wait_session_idle(self.state.session_id)
         await self._tts.wait_session_idle(self.state.session_id)
         self.state.input_audio_buffer.clear()
         self.state.vad.reset()
@@ -336,6 +363,13 @@ class VoicePipeline:
             or self.state.input_audio_buffer.size_bytes > 0
         ):
             raise ValueError("cannot change VAD settings while input audio is buffered")
+        if (
+            self._semantic_turn.mode == "smart_turn_v3"
+            and config.turn_detection.min_silence_ms >= self._semantic_turn.fallback_silence_ms
+        ):
+            raise ValueError(
+                "turn_detection.min_silence_ms must be lower than the semantic fallback"
+            )
         self.state.vad.configure(
             threshold=config.turn_detection.threshold,
             min_speech_ms=config.turn_detection.min_speech_ms,
@@ -468,11 +502,15 @@ class VoicePipeline:
         if not self.state.vad_enabled:
             return
         signals = await asyncio.to_thread(self.state.vad.process_pcm16, pcm16)
+        self._vad_progress.set()
         for signal in signals:
             if signal.kind == "speech_started":
-                await self._speech_started(signal.sample_index)
+                if self.state.speech_start_sample is None:
+                    await self._speech_started(signal.sample_index)
+                else:
+                    await self._speech_resumed()
             else:
-                await self._speech_stopped(signal.sample_index)
+                await self._speech_stop_candidate(signal.sample_index)
         if self.state.speech_start_sample is not None:
             self._schedule_partial()
         elif self.state.input_audio_buffer.size_bytes > 64_000:
@@ -486,6 +524,8 @@ class VoicePipeline:
         self.state.current_turn_revision += 1
         self.state.current_turn_id = _id("turn")
         self.state.speech_start_sample = sample_index
+        self._speech_stopped_at = None
+        self._speech_ended_at = None
         self.state.partial_epoch += 1
         if self.state.pending_call is not None:
             self.state.pending_call = None
@@ -505,13 +545,209 @@ class VoicePipeline:
             )
         )
 
-    async def _speech_stopped(self, sample_index: int) -> None:
+    async def _speech_resumed(self) -> None:
+        self._turn_candidate_id += 1
+        await self._cancel_turn_detection()
+        self.state.partial_epoch += 1
+        self._telemetry.turn_resumptions.inc()
+
+    async def _speech_stop_candidate(self, sample_index: int) -> None:
+        detected_at = time.monotonic()
+        samples_received_after_speech = max(
+            0,
+            self.state.input_audio_buffer.end_sample - sample_index,
+        )
+        speech_ended_at = detected_at - samples_received_after_speech / 16_000
+        if self._semantic_turn.mode == "fixed_silence":
+            await self._speech_stopped(sample_index, speech_ended_at=speech_ended_at)
+            return
+        turn_id = self.state.current_turn_id
+        start = self.state.speech_start_sample
+        scheduler = self._turn_scheduler
+        if turn_id is None or start is None or scheduler is None:
+            return
+        self._turn_candidate_id += 1
+        candidate_id = self._turn_candidate_id
+        revision = self.state.current_turn_revision
+        max_samples = self._semantic_turn.max_audio_ms * 16
+        window_start = max(start, sample_index - max_samples)
+        audio = self.state.input_audio_buffer.slice_samples(window_start, sample_index)
+        await self._cancel_turn_detection()
+        self._turn_candidate_task = asyncio.create_task(
+            self._classify_turn_candidate(
+                turn_id=turn_id,
+                revision=revision,
+                candidate_id=candidate_id,
+                sample_index=sample_index,
+                audio=audio,
+                detected_at=detected_at,
+                speech_ended_at=speech_ended_at,
+            )
+        )
+
+    async def _classify_turn_candidate(
+        self,
+        *,
+        turn_id: str,
+        revision: int,
+        candidate_id: int,
+        sample_index: int,
+        audio: bytes,
+        detected_at: float,
+        speech_ended_at: float,
+    ) -> None:
+        scheduler = self._turn_scheduler
+        assert scheduler is not None
+
+        def stale() -> bool:
+            return (
+                self._draining
+                or self.state.current_turn_id != turn_id
+                or self.state.current_turn_revision != revision
+                or self._turn_candidate_id != candidate_id
+                or self.state.speech_start_sample is None
+            )
+
+        try:
+            result = await scheduler.submit(
+                TurnJob(
+                    session_id=self.state.session_id,
+                    turn_id=turn_id,
+                    turn_revision=revision,
+                    candidate_id=candidate_id,
+                    audio=audio,
+                    is_stale=stale,
+                )
+            )
+            if result is None or stale():
+                return
+            self._telemetry.turn_candidate_decision_seconds.observe(time.monotonic() - detected_at)
+            self._telemetry.turn_completion_probability.observe(result.probability)
+            if result.probability >= self._semantic_turn.completion_threshold:
+                self._telemetry.turn_complete_predictions.inc()
+                await self._speech_stopped(sample_index, speech_ended_at=speech_ended_at)
+                return
+            self._telemetry.turn_incomplete_predictions.inc()
+            vad_silence_ms = self.state.vad.configuration[3]
+            elapsed_ms = (time.monotonic() - detected_at) * 1_000
+            remaining_ms = max(
+                0.0,
+                self._semantic_turn.fallback_silence_ms - vad_silence_ms - elapsed_ms,
+            )
+            self._turn_fallback_task = asyncio.create_task(
+                self._semantic_fallback(
+                    turn_id=turn_id,
+                    revision=revision,
+                    candidate_id=candidate_id,
+                    sample_index=sample_index,
+                    delay_seconds=remaining_ms / 1_000,
+                    speech_ended_at=speech_ended_at,
+                )
+            )
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.exception(
+                "semantic_turn_detection_failed",
+                extra={
+                    "session_id": self.state.session_id,
+                    "turn_id": turn_id,
+                    "turn_revision": revision,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            await self.send_error(ErrorCode.MODEL_FAILURE, "semantic turn detection failed")
+            await self.state.transport.close(
+                code=int(CloseCode.SERVICE_FAILURE),
+                reason=ErrorCode.MODEL_FAILURE,
+            )
+        finally:
+            if self._turn_candidate_task is asyncio.current_task():
+                self._turn_candidate_task = None
+
+    async def _semantic_fallback(
+        self,
+        *,
+        turn_id: str,
+        revision: int,
+        candidate_id: int,
+        sample_index: int,
+        delay_seconds: float,
+        speech_ended_at: float,
+    ) -> None:
+        try:
+            await asyncio.sleep(delay_seconds)
+            continuation_seconds = (
+                self.state.vad.configuration[2] / 1_000
+                + self.state.vad.window_samples / self.state.vad.sample_rate
+            )
+            continuation_deadline = time.monotonic() + continuation_seconds
+            while (
+                not self._draining
+                and self._turn_candidate_id == candidate_id
+                and self.state.vad.speech_candidate_active
+            ):
+                remaining = continuation_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._vad_progress.clear()
+                try:
+                    await asyncio.wait_for(
+                        self._vad_progress.wait(),
+                        timeout=remaining,
+                    )
+                except TimeoutError:
+                    break
+            if (
+                not self._draining
+                and self.state.current_turn_id == turn_id
+                and self.state.current_turn_revision == revision
+                and self._turn_candidate_id == candidate_id
+                and self.state.speech_start_sample is not None
+            ):
+                self._telemetry.turn_fallbacks.inc()
+                await self._speech_stopped(sample_index, speech_ended_at=speech_ended_at)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._turn_fallback_task is asyncio.current_task():
+                self._turn_fallback_task = None
+
+    async def _cancel_turn_detection(self) -> None:
+        current = asyncio.current_task()
+        tasks = [
+            task
+            for task in (self._turn_candidate_task, self._turn_fallback_task)
+            if task is not None and task is not current
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if self._turn_candidate_task is not current:
+            self._turn_candidate_task = None
+        if self._turn_fallback_task is not current:
+            self._turn_fallback_task = None
+
+    async def _speech_stopped(
+        self,
+        sample_index: int,
+        *,
+        speech_ended_at: float | None = None,
+    ) -> None:
         turn_id = self.state.current_turn_id
         start = self.state.speech_start_sample
         if turn_id is None or start is None:
             return
         revision = self.state.current_turn_revision
         self._speech_stopped_at = time.monotonic()
+        self._speech_ended_at = min(
+            self._speech_stopped_at,
+            self._speech_stopped_at if speech_ended_at is None else speech_ended_at,
+        )
+        self._telemetry.speech_endpoint_latency_seconds.observe(
+            self._speech_stopped_at - self._speech_ended_at
+        )
         await self.state.transport.send(
             SpeechStoppedEvent(
                 event_id=_id("evt"),
@@ -613,6 +849,7 @@ class VoicePipeline:
             audio=audio,
             transcription_enabled=self.state.transcription_enabled,
             speech_stopped_at=self._speech_stopped_at or time.monotonic(),
+            speech_ended_at=self._speech_ended_at or time.monotonic(),
         )
         self._turns_idle.clear()
         if self._turn_worker_task is None or self._turn_worker_task.done():
@@ -686,9 +923,12 @@ class VoicePipeline:
             await self._start_response(
                 response_instructions="",
                 speech_stopped_at=completed.speech_stopped_at,
+                speech_ended_at=completed.speech_ended_at,
             )
 
     async def _commit_audio(self) -> None:
+        self._turn_candidate_id += 1
+        await self._cancel_turn_detection()
         if self.state.speech_start_sample is not None:
             await self._speech_stopped(self.state.input_audio_buffer.end_sample)
             self.state.vad.reset()
@@ -720,6 +960,8 @@ class VoicePipeline:
 
     async def _clear_audio(self) -> None:
         self.state.partial_epoch += 1
+        self._turn_candidate_id += 1
+        await self._cancel_turn_detection()
         if self._partial_task is not None:
             self._partial_task.cancel()
             await asyncio.gather(self._partial_task, return_exceptions=True)
@@ -852,6 +1094,7 @@ class VoicePipeline:
         tools: Sequence[Any] | None = None,
         tool_choice: Any | None = None,
         speech_stopped_at: float | None = None,
+        speech_ended_at: float | None = None,
         direct_text: str | None = None,
         source_event_id: str | None = None,
     ) -> None:
@@ -865,6 +1108,7 @@ class VoicePipeline:
                         tools=tools,
                         tool_choice=tool_choice,
                         speech_stopped_at=speech_stopped_at,
+                        speech_ended_at=speech_ended_at,
                         source_event_id=source_event_id,
                     )
                 )
@@ -923,6 +1167,7 @@ class VoicePipeline:
             speech_stopped_at=(
                 self._speech_stopped_at if speech_stopped_at is None else speech_stopped_at
             ),
+            speech_ended_at=(self._speech_ended_at if speech_ended_at is None else speech_ended_at),
             direct_speak=direct_text is not None,
         )
         if direct_text is None and not self._generation_started:
@@ -955,6 +1200,7 @@ class VoicePipeline:
         tools: Sequence[Any] | None,
         tool_choice: Any | None,
         speech_stopped_at: float | None,
+        speech_ended_at: float | None,
         source_event_id: str | None,
     ) -> None:
         try:
@@ -966,6 +1212,7 @@ class VoicePipeline:
                 tools=tools,
                 tool_choice=tool_choice,
                 speech_stopped_at=speech_stopped_at,
+                speech_ended_at=speech_ended_at,
                 source_event_id=source_event_id,
             )
         except asyncio.CancelledError:
@@ -1247,6 +1494,10 @@ class VoicePipeline:
             if context.audio_sequence == 0 and context.speech_stopped_at is not None:
                 self._telemetry.first_audio_latency_seconds.observe(
                     time.monotonic() - context.speech_stopped_at
+                )
+            if context.audio_sequence == 0 and context.speech_ended_at is not None:
+                self._telemetry.speech_end_to_first_audio_seconds.observe(
+                    time.monotonic() - context.speech_ended_at
                 )
             if context.audio_sequence == 0 and self.state.tool_result_ack_at is not None:
                 self._telemetry.tool_result_to_first_audio_seconds.observe(

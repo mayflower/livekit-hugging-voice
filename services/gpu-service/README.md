@@ -1,14 +1,15 @@
 # hugging-voice-gpu-service
 
-The GPU service will host the fixed Silero -> Parakeet -> Gemma -> Qwen pipeline,
+The GPU service hosts the fixed Silero -> Smart Turn -> Parakeet -> LLM -> Qwen pipeline,
 with a bounded operator-configured number of isolated sessions and one copy of
 each expensive runtime.
 
 The service lifecycle loads the mounted bearer secret, verifies the model lock
 offline, requires CUDA, starts
-one pinned loopback `llama-server`, loads one shared Parakeet and one shared Qwen
-runtime, performs actual warmups, and only then becomes ready. It has no CPU or
-model fallback and does not invoke a Hub download helper.
+one pinned loopback `llama-server`, loads one shared CPU-only Smart Turn runtime,
+one shared Parakeet, and the configured Qwen runtime pool, performs actual warmups,
+and only then becomes ready. It has no model fallback and does not invoke a Hub
+download helper.
 
 Install the locked runtime dependencies without downloading weights:
 

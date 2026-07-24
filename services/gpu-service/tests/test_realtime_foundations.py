@@ -393,6 +393,8 @@ def test_telemetry_exports_every_required_wave_three_metric() -> None:
         "hugging_voice_tts_duration_seconds",
         "hugging_voice_tts_audio_seconds",
         "hugging_voice_first_audio_latency_seconds",
+        "hugging_voice_speech_endpoint_latency_seconds",
+        "hugging_voice_speech_end_to_first_audio_seconds",
         "hugging_voice_barge_in_stop_latency_seconds",
         "hugging_voice_stale_chunks_dropped_total",
         "hugging_voice_websocket_errors_total",

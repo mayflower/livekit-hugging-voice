@@ -340,6 +340,7 @@ def test_authenticated_handshake_and_complete_text_audio_response(tmp_path: Path
                 "llm": REVISION,
                 "tts": REVISION,
             }
+            assert created["turn_detection"]["min_silence_ms"] == 500
             session_id = created["session_id"]
             websocket.send_json(
                 {

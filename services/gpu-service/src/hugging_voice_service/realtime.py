@@ -21,6 +21,7 @@ from hugging_voice_protocol.events import (
     ResponseDoneEvent,
     ResponseOutputAudioDeltaEvent,
     ServerEvent,
+    ServerVADConfig,
     SessionCreatedEvent,
     SessionModels,
     parse_client_event_json,
@@ -35,6 +36,7 @@ from .pipeline import GemmaStreamer, PipelineEventError, VoicePipeline
 from .runtimes.silero import SessionVAD
 from .schedulers.stt import STTRuntime, STTScheduler
 from .schedulers.tts import TTSRuntime, TTSScheduler
+from .schedulers.turn import TurnRuntime, TurnScheduler
 from .sessions import SessionRegistry, SessionState, SessionTransport
 
 logger = logging.getLogger(__name__)
@@ -208,6 +210,7 @@ class RealtimeService:
         self._vad_factory = vad_factory or self._new_vad
         self._stt: STTScheduler | None = None
         self._tts: TTSScheduler | None = None
+        self._turn: TurnScheduler | None = None
         self._started = False
         self._draining = False
 
@@ -222,6 +225,11 @@ class RealtimeService:
             return
         if self.lifecycle.parakeet is None or self.lifecycle.qwen is None:
             raise RuntimeError("speech runtimes are unavailable after lifecycle startup")
+        if (
+            self.settings.semantic_turn.mode == "smart_turn_v3"
+            and self.lifecycle.smart_turn is None
+        ):
+            raise RuntimeError("Smart Turn runtime is unavailable after lifecycle startup")
         self._stt = STTScheduler(
             cast(STTRuntime, self.lifecycle.parakeet),
             telemetry=self.lifecycle.telemetry,
@@ -233,6 +241,12 @@ class RealtimeService:
             tuple(cast(TTSRuntime, runtime) for runtime in qwen_runtimes),
             telemetry=self.lifecycle.telemetry,
         )
+        if self.lifecycle.smart_turn is not None:
+            self._turn = TurnScheduler(
+                cast(TurnRuntime, self.lifecycle.smart_turn),
+                telemetry=self.lifecycle.telemetry,
+                max_jobs=self.settings.semantic_turn.queue_size,
+            )
         await self._stt.start()
         await self._tts.start()
         self._started = True
@@ -431,8 +445,11 @@ class RealtimeService:
                 await self._stt.aclose()
             if self._tts is not None:
                 await self._tts.aclose()
+            if self._turn is not None:
+                await self._turn.aclose()
         self._stt = None
         self._tts = None
+        self._turn = None
         self._started = False
 
     async def _serve_session(
@@ -515,6 +532,8 @@ class RealtimeService:
             gemma=cast(GemmaStreamer, self.lifecycle.gemma),
             speech=self.settings.speech,
             transcription=self.settings.transcription,
+            semantic_turn=self.settings.semantic_turn,
+            turn_scheduler=self._turn,
             telemetry=self.lifecycle.telemetry,
         )
 
@@ -545,6 +564,13 @@ class RealtimeService:
                 stt=revisions["nvidia/parakeet-tdt-0.6b-v3"],
                 llm=revisions[llm_model],
                 tts=revisions[tts_model],
+            ),
+            turn_detection=ServerVADConfig(
+                threshold=self.settings.vad.threshold,
+                min_speech_ms=self.settings.vad.min_speech_ms,
+                min_speech_continuation_ms=self.settings.vad.min_speech_continuation_ms,
+                min_silence_ms=self.settings.vad.min_silence_ms,
+                speech_pad_ms=self.settings.vad.speech_pad_ms,
             ),
             language=self.settings.speech.default_language,
             voice=self.settings.speech.default_voice,

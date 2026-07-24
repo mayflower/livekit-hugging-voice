@@ -86,7 +86,8 @@ slot to `idle`.
 
 ## Fixed decisions
 
-- Models: Silero VAD, Parakeet TDT 0.6B v3, Gemma 4 31B IT, Qwen3-TTS 1.7B
+- Models: Silero VAD, Smart Turn v3.2 CPU, Parakeet TDT 0.6B v3,
+  the selected local llama.cpp chat model, and the selected Qwen3-TTS runtime
   (base talker for the default `voice_clone` mode, shared codec; the VoiceDesign
   talker is an optional manifest entry for `voice_design`).
 - Internal transport: authenticated bounded WebSocket carrying JSON and PCM16.

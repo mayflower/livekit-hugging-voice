@@ -23,6 +23,11 @@ def test_default_config_matches_fixed_audio_and_capacity_contract() -> None:
     assert settings.audio.input_sample_rate == 16_000
     assert settings.audio.output_sample_rate == 24_000
     assert settings.audio.vad_window_samples == 512
+    assert settings.vad.min_silence_ms == 250
+    assert settings.semantic_turn.mode == "smart_turn_v3"
+    assert settings.semantic_turn.completion_threshold == 0.5
+    assert settings.semantic_turn.fallback_silence_ms == 2_500
+    assert settings.semantic_turn.max_audio_ms == 8_000
     assert settings.speech.resolve_language("en").model_language == "English"
     rendered = settings.speech.resolve_voice("warm_female").render("German")
     assert "native German speaker" in rendered
@@ -55,6 +60,12 @@ def test_default_config_matches_fixed_audio_and_capacity_contract() -> None:
             assert reference.text
     assert set(settings.speech.languages) == {"de", "en", "fr", "it"}
     assert len(settings.speech.voices) == 5
+
+
+def test_fixed_silence_defaults_remain_conservative() -> None:
+    settings = ServiceSettings()
+    assert settings.semantic_turn.mode == "fixed_silence"
+    assert settings.vad.min_silence_ms == 500
 
 
 @pytest.mark.parametrize(
@@ -143,6 +154,26 @@ def test_latency_configuration_is_strictly_bounded() -> None:
         assert (
             ServiceSettings(vad={"min_silence_ms": silence_ms}).vad.min_silence_ms  # type: ignore[arg-type]
             == silence_ms
+        )
+    with pytest.raises(ValidationError, match="lower than semantic_turn"):
+        ServiceSettings(
+            vad={"min_silence_ms": 500},  # type: ignore[arg-type]
+            semantic_turn={
+                "mode": "smart_turn_v3",
+                "fallback_silence_ms": 500,
+            },  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError, match="queue_size"):
+        ServiceSettings(
+            server={"max_sessions": 3},  # type: ignore[arg-type]
+            models={
+                "llama_parallel_slots": 3,
+                "llama_context_size": 32_768,
+            },  # type: ignore[arg-type]
+            semantic_turn={
+                "mode": "smart_turn_v3",
+                "queue_size": 2,
+            },  # type: ignore[arg-type]
         )
     with pytest.raises(ValidationError):
         ServiceSettings(

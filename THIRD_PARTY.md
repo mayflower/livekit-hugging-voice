@@ -22,6 +22,7 @@ not present in Git or the service image.
 | Qwen3-TTS 0.6B Base | revision in `models/profiles/` | candidate synthesis; Apache-2.0 | weights fetched separately |
 | NVIDIA Parakeet TDT 0.6B v3 | revision in `models/manifest.yaml` | transcription; CC-BY-4.0 | weights fetched separately |
 | Silero VAD | 6.2.1 | voice activity detection; MIT | optional GPU dependency |
+| Pipecat Smart Turn v3.2 | revision in `models/manifest.yaml` | semantic turn detection; BSD-2-Clause | weights fetched separately |
 | llama.cpp | `3ce7da2c852c538c4c5f9806da27029cf8c9cc4a` | loopback model server; MIT | binary built in image |
 | nano-parakeet | 0.2.1 | Parakeet inference; MIT | optional GPU dependency |
 | faster-qwen3-tts | 0.3.2 | Qwen streaming runtime; MIT | optional GPU dependency |

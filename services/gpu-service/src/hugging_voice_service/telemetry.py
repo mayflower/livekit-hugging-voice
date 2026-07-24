@@ -105,6 +105,67 @@ class ServiceTelemetry:
             "Cancelled response generations",
             registry=self.registry,
         )
+        self.turn_queue_seconds = Histogram(
+            "hugging_voice_turn_queue_seconds",
+            "Semantic turn detector scheduler queue wait",
+            registry=self.registry,
+        )
+        self.turn_inference_seconds = Histogram(
+            "hugging_voice_turn_inference_seconds",
+            "Semantic turn detector inference duration",
+            registry=self.registry,
+        )
+        self.turn_candidate_decision_seconds = Histogram(
+            "hugging_voice_turn_candidate_decision_seconds",
+            "Candidate VAD stop to semantic turn decision",
+            registry=self.registry,
+        )
+        self.speech_endpoint_latency_seconds = Histogram(
+            "hugging_voice_speech_endpoint_latency_seconds",
+            "Estimated final speech sample to committed speech stop",
+            registry=self.registry,
+        )
+        self.turn_completion_probability = Histogram(
+            "hugging_voice_turn_completion_probability",
+            "Smart Turn completion probability",
+            buckets=(0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95),
+            registry=self.registry,
+        )
+        self.turn_complete_predictions = Counter(
+            "hugging_voice_turn_complete_predictions_total",
+            "Semantic candidates classified as complete",
+            registry=self.registry,
+        )
+        self.turn_incomplete_predictions = Counter(
+            "hugging_voice_turn_incomplete_predictions_total",
+            "Semantic candidates classified as incomplete",
+            registry=self.registry,
+        )
+        self.turn_fallbacks = Counter(
+            "hugging_voice_turn_fallbacks_total",
+            "Incomplete semantic candidates ended by the hard silence fallback",
+            registry=self.registry,
+        )
+        self.turn_resumptions = Counter(
+            "hugging_voice_turn_resumptions_total",
+            "Speech resumptions that kept the existing semantic turn open",
+            registry=self.registry,
+        )
+        self.turn_stale_results = Counter(
+            "hugging_voice_turn_stale_results_total",
+            "Semantic turn results discarded after speech resumed or state changed",
+            registry=self.registry,
+        )
+        self.turn_jobs_active = Gauge(
+            "hugging_voice_turn_jobs_active",
+            "Currently executing semantic turn detector jobs",
+            registry=self.registry,
+        )
+        self.turn_queue_depth = Gauge(
+            "hugging_voice_turn_queue_depth",
+            "Queued semantic turn detector jobs",
+            registry=self.registry,
+        )
         self.stt_queue_seconds = Histogram(
             "hugging_voice_stt_queue_seconds",
             "STT scheduler queue wait",
@@ -198,6 +259,11 @@ class ServiceTelemetry:
         self.first_audio_latency_seconds = Histogram(
             "hugging_voice_first_audio_latency_seconds",
             "Speech stop to first response audio",
+            registry=self.registry,
+        )
+        self.speech_end_to_first_audio_seconds = Histogram(
+            "hugging_voice_speech_end_to_first_audio_seconds",
+            "Estimated final speech sample to first response audio",
             registry=self.registry,
         )
         self.barge_in_stop_latency_seconds = Histogram(

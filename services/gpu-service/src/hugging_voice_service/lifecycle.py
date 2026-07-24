@@ -24,6 +24,7 @@ from .runtimes.qwen_tts import (
     QwenTTSRuntime,
     QwenTTSRuntimePool,
 )
+from .runtimes.smart_turn import SmartTurnRuntime
 from .telemetry import ServiceTelemetry
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class LifecyclePhase(StrEnum):
     CREATED = "created"
     LOADING_AUTH = "loading_auth"
     VERIFYING_MODELS = "verifying_models"
+    LOADING_SMART_TURN = "loading_smart_turn"
     CHECKING_CUDA = "checking_cuda"
     STARTING_LLAMA = "starting_llama"
     LOADING_PARAKEET = "loading_parakeet"
@@ -112,10 +114,21 @@ class ManagedGemma(Protocol):
     async def aclose(self) -> None: ...
 
 
+class ManagedSmartTurn(Protocol):
+    load_count: int
+
+    def load(self) -> None: ...
+
+    def warmup(self) -> None: ...
+
+    def close(self) -> None: ...
+
+
 LlamaFactory = Callable[[Path, Path, ServiceSettings], ManagedLlama]
 ParakeetFactory = Callable[[Path], ManagedParakeet]
 QwenFactory = Callable[[Path, Path | None, SpeechSettings, TTSSettings], ManagedQwen]
 GemmaFactory = Callable[[int, int, LLMProfile, Callable[[], None]], ManagedGemma]
+SmartTurnFactory = Callable[[Path], ManagedSmartTurn]
 CudaProbe = Callable[[], None]
 GpuMemoryProbe = Callable[[], int]
 
@@ -247,6 +260,7 @@ class ServiceLifecycle:
         parakeet_factory: ParakeetFactory = ParakeetRuntime,
         qwen_factory: QwenFactory = _qwen_factory,
         gemma_factory: GemmaFactory = _gemma_factory,
+        smart_turn_factory: SmartTurnFactory = SmartTurnRuntime,
         gpu_memory_probe: GpuMemoryProbe = _gpu_memory_bytes,
     ) -> None:
         self.settings = settings
@@ -256,6 +270,7 @@ class ServiceLifecycle:
         self._parakeet_factory = parakeet_factory
         self._qwen_factory = qwen_factory
         self._gemma_factory = gemma_factory
+        self._smart_turn_factory = smart_turn_factory
         self._gpu_memory_probe = gpu_memory_probe
         self._gpu_memory_observation_failed = False
         self.phase = LifecyclePhase.CREATED
@@ -266,6 +281,7 @@ class ServiceLifecycle:
         self.parakeet: ManagedParakeet | None = None
         self.qwen: ManagedQwen | None = None
         self.gemma: ManagedGemma | None = None
+        self.smart_turn: ManagedSmartTurn | None = None
         self._llama_monitor: asyncio.Task[None] | None = None
         self._start_lock = asyncio.Lock()
 
@@ -309,6 +325,13 @@ class ServiceLifecycle:
 
                 self.phase = LifecyclePhase.CHECKING_CUDA
                 await asyncio.to_thread(self._cuda_probe)
+
+                if self.settings.semantic_turn.mode == "smart_turn_v3":
+                    self.phase = LifecyclePhase.LOADING_SMART_TURN
+                    self.smart_turn = self._smart_turn_factory(artifacts["smart_turn"])
+                    await asyncio.to_thread(self.smart_turn.load)
+                    await asyncio.to_thread(self.smart_turn.warmup)
+                    self.telemetry.model_loads.labels(model="smart_turn").inc()
 
                 self.phase = LifecyclePhase.STARTING_LLAMA
                 self.llama = self._llama_factory(
@@ -391,6 +414,9 @@ class ServiceLifecycle:
             "llama_parallel_slots": self.settings.models.llama_parallel_slots,
             "llama_context_size": self.settings.models.llama_context_size,
             "vad_min_silence_ms": self.settings.vad.min_silence_ms,
+            "semantic_turn_mode": self.settings.semantic_turn.mode,
+            "semantic_turn_threshold": self.settings.semantic_turn.completion_threshold,
+            "semantic_turn_fallback_silence_ms": self.settings.semantic_turn.fallback_silence_ms,
             "tts_chunk_size": self.settings.tts.chunk_size,
             "models": []
             if self.lock is None
@@ -448,6 +474,9 @@ class ServiceLifecycle:
         if self.parakeet is not None:
             await asyncio.to_thread(self.parakeet.close)
             self.parakeet = None
+        if self.smart_turn is not None:
+            await asyncio.to_thread(self.smart_turn.close)
+            self.smart_turn = None
         if self.llama is not None:
             await self.llama.stop()
             self.llama = None
@@ -470,6 +499,8 @@ class ServiceLifecycle:
             tts_model_id,
             "silero-vad",
         }
+        if self.settings.semantic_turn.mode == "smart_turn_v3":
+            required.add("pipecat-ai/smart-turn-v3")
         missing = required - models.keys()
         if missing:
             raise RuntimeError(f"model lock is missing required entries: {sorted(missing)}")
@@ -480,6 +511,11 @@ class ServiceLifecycle:
             ),
             "parakeet": self._only_file(models["nvidia/parakeet-tdt-0.6b-v3"]),
         }
+        if self.settings.semantic_turn.mode == "smart_turn_v3":
+            artifacts["smart_turn"] = self._named_file(
+                models["pipecat-ai/smart-turn-v3"],
+                "smart-turn-v3.2-cpu.onnx",
+            )
         if self.settings.tts.profile == "qwen3_tts_0_6b_cuda":
             artifacts["qwen_primary"] = self.settings.models.root / tts_model_id
             return artifacts

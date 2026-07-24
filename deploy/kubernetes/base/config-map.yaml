@@ -51,10 +51,16 @@ data:
       threshold: 0.6
       min_speech_ms: 384
       min_speech_continuation_ms: 192
-      min_silence_ms: 500
+      min_silence_ms: 250
       speech_pad_ms: 30
       short_segment_merge_ms: 0
       interrupt_response: true
+    semantic_turn:
+      mode: smart_turn_v3
+      completion_threshold: 0.5
+      fallback_silence_ms: 2500
+      max_audio_ms: 8000
+      queue_size: 8
     transcription:
       # Optional partial STT competes with final STT on the shared runtime.
       partial_enabled: false

@@ -81,6 +81,14 @@ class VADSettings(StrictConfig):
     interrupt_response: bool = True
 
 
+class SemanticTurnSettings(StrictConfig):
+    mode: Literal["fixed_silence", "smart_turn_v3"] = "fixed_silence"
+    completion_threshold: float = Field(default=0.5, ge=0.05, le=0.95)
+    fallback_silence_ms: int = Field(default=2_500, ge=500, le=10_000)
+    max_audio_ms: Literal[8_000] = 8_000
+    queue_size: int = Field(default=8, ge=1, le=64)
+
+
 ModelLanguage = Literal[
     "Chinese",
     "English",
@@ -444,6 +452,7 @@ class ServiceSettings(BaseSettings):
     models: ModelSettings = Field(default_factory=ModelSettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)
     vad: VADSettings = Field(default_factory=VADSettings)
+    semantic_turn: SemanticTurnSettings = Field(default_factory=SemanticTurnSettings)
     transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
@@ -454,6 +463,18 @@ class ServiceSettings(BaseSettings):
             raise ValueError("server.max_sessions cannot exceed models.llama_parallel_slots")
         if self.tts.worker_count > self.server.max_sessions:
             raise ValueError("tts.worker_count cannot exceed server.max_sessions")
+        if (
+            self.semantic_turn.mode == "smart_turn_v3"
+            and self.vad.min_silence_ms >= self.semantic_turn.fallback_silence_ms
+        ):
+            raise ValueError(
+                "vad.min_silence_ms must be lower than semantic_turn.fallback_silence_ms"
+            )
+        if (
+            self.semantic_turn.mode == "smart_turn_v3"
+            and self.semantic_turn.queue_size < self.server.max_sessions
+        ):
+            raise ValueError("semantic_turn.queue_size cannot be lower than server.max_sessions")
         if self.tts.profile == "qwen3_tts_0_6b_cuda" and self.speech.tts_mode != "voice_clone":
             raise ValueError("qwen3_tts_0_6b_cuda supports only speech.tts_mode=voice_clone")
         expected_models: dict[ServiceProfileId, tuple[LLMProfileId, TTSProfile]] = {

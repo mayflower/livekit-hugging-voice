@@ -62,6 +62,10 @@ def test_session_created_accepts_configured_llama_slot() -> None:
     assert event.llama_slot_id == 19  # type: ignore[union-attr]
 
 
+def test_fixed_silence_protocol_default_remains_conservative() -> None:
+    assert SessionConfig().turn_detection.min_silence_ms == 500
+
+
 @pytest.mark.parametrize(
     ("path", "value"),
     [

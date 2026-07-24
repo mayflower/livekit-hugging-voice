@@ -48,6 +48,18 @@
       "revision": "6.2.1",
       "license": "MIT",
       "files": []
+    },
+    {
+      "delivery": "huggingface",
+      "id": "pipecat-ai/smart-turn-v3",
+      "source_repo": "pipecat-ai/smart-turn-v3",
+      "revision": "f766f81d3cfdf7737ac64aad813d91bbfd56bf93",
+      "license": "BSD-2-Clause",
+      "files": [
+        {
+          "path": "smart-turn-v3.2-cpu.onnx"
+        }
+      ]
     }
   ]
 }

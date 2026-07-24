@@ -15,15 +15,16 @@ a native LiveKit Agents realtime-model plugin. The intended path is:
 LiveKit Agent
   -> livekit-plugins-hugging-voice
   -> authenticated internal WebSocket
-  -> Silero VAD
+  -> Silero VAD + local Smart Turn v3.2
   -> nvidia/parakeet-tdt-0.6b-v3
   -> google/gemma-4-31B-it through a local llama-server
   -> Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
   -> 24 kHz PCM16 audio in the configured language and voice
 ```
 
-Each GPU pod loads Parakeet and one selected LLM once, plus the configured bounded
-pool of one or two Qwen runtimes in production. Session capacity is
+Each GPU pod loads one CPU-only Smart Turn runtime, Parakeet, and one selected LLM
+once, plus the configured bounded pool of one or two Qwen runtimes in production.
+Session capacity is
 operator-configurable; the default is two for compatibility. This default is not
 a performance guarantee.
 

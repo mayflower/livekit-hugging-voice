@@ -30,6 +30,7 @@ from hugging_voice_protocol.events import (
     ResponseOutputTextDoneEvent,
     ResponseReason,
     ResponseStatus,
+    ServerVADConfig,
     SessionCreatedEvent,
     SessionModels,
     SessionUpdatedEvent,
@@ -123,6 +124,7 @@ class ContractServer:
                     llm=REVISION,
                     tts=REVISION,
                 ),
+                turn_detection=ServerVADConfig(min_silence_ms=250),
                 language=self.default_language,
                 voice=self.default_voice,
                 supported_languages=("de", "en"),
@@ -392,7 +394,8 @@ async def test_native_session_say_uses_protocol_response_lifecycle(
         assert "".join([delta async for delta in messages[0].text_stream]) == "Guten Tag. "
         assert len([frame async for frame in messages[0].audio_stream]) == 1
         event = await server.next_event()
-        assert event.type == "session.update"
+        assert isinstance(event, SessionUpdateEvent)
+        assert event.session.turn_detection.min_silence_ms == 250
         event = await server.next_event()
         assert event.type == "response.speak"
         assert event.text == "Ich prüfe das kurz."

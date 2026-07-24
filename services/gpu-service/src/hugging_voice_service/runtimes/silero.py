@@ -93,6 +93,12 @@ class SessionVAD:
         return self._speech_start is not None
 
     @property
+    def speech_candidate_active(self) -> bool:
+        """Whether post-stop audio may be the beginning of resumed speech."""
+
+        return self._candidate_start is not None
+
+    @property
     def configuration(self) -> VADConfiguration:
         return self._configuration
 

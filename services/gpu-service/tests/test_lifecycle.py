@@ -12,6 +12,7 @@ import pytest
 from hugging_voice_service.app import create_app
 from hugging_voice_service.config import (
     ModelSettings,
+    SemanticTurnSettings,
     ServerSettings,
     ServiceSettings,
     SpeechSettings,
@@ -20,6 +21,7 @@ from hugging_voice_service.lifecycle import LifecyclePhase, ServiceLifecycle
 from hugging_voice_service.llama_process import LlamaProcessState
 from hugging_voice_service.model_manifest import LockedFile, LockedModel, ModelLock, render_lock
 from hugging_voice_service.realtime import RealtimeService
+from hugging_voice_service.runtimes.smart_turn import SmartTurnResult
 
 REVISION = "a" * 40
 
@@ -58,6 +60,12 @@ class FakeBlockingRuntime:
 
     def close(self) -> None:
         self.closed += 1
+
+
+class FakeSmartTurn(FakeBlockingRuntime):
+    def predict_pcm16(self, audio: bytes) -> SmartTurnResult:
+        del audio
+        return SmartTurnResult(probability=1.0)
 
 
 class FakeGemma:
@@ -147,6 +155,21 @@ def make_settings_and_lock(tmp_path: Path) -> ServiceSettings:
             files=(),
             license="MIT",
         ),
+        LockedModel(
+            delivery="huggingface",
+            id="pipecat-ai/smart-turn-v3",
+            source_repo="pipecat-ai/smart-turn-v3",
+            revision=REVISION,
+            files=(
+                locked_file(
+                    root,
+                    "pipecat-ai/smart-turn-v3",
+                    "smart-turn-v3.2-cpu.onnx",
+                    b"smart-turn",
+                ),
+            ),
+            license="BSD-2-Clause",
+        ),
     )
     lock_path = tmp_path / "manifest.lock.json"
     lock_path.write_text(
@@ -193,10 +216,14 @@ async def test_lifecycle_loads_each_runtime_once_and_reports_real_readiness(
 ) -> None:
     monkeypatch.setattr(importlib.metadata, "version", lambda package: "6.2.1")
     settings = make_settings_and_lock(tmp_path)
+    settings = settings.model_copy(
+        update={"semantic_turn": SemanticTurnSettings(mode="smart_turn_v3")}
+    )
     llama = FakeLlama()
     parakeet = FakeBlockingRuntime()
     qwen = FakeBlockingRuntime()
     gemma = FakeGemma()
+    smart_turn = FakeSmartTurn()
     lifecycle = ServiceLifecycle(
         settings,
         cuda_probe=lambda: None,
@@ -204,16 +231,24 @@ async def test_lifecycle_loads_each_runtime_once_and_reports_real_readiness(
         parakeet_factory=lambda checkpoint: parakeet,
         qwen_factory=lambda talker, codec, speech, tts: qwen,
         gemma_factory=lambda port, slots, profile, violation: gemma,
+        smart_turn_factory=lambda model: smart_turn,
         gpu_memory_probe=lambda: 123_456,
     )
     await lifecycle.start()
     assert lifecycle.ready
     assert lifecycle.phase.value == LifecyclePhase.READY.value
-    assert (llama.starts, parakeet.load_count, qwen.load_count, gemma.warmups) == (1, 1, 1, 1)
+    assert (
+        llama.starts,
+        parakeet.load_count,
+        qwen.load_count,
+        gemma.warmups,
+        smart_turn.load_count,
+    ) == (1, 1, 1, 1, 1)
     metrics = lifecycle.telemetry.render().decode()
     assert 'hugging_voice_model_loads_total{model="gemma"} 1.0' in metrics
     assert 'hugging_voice_model_loads_total{model="parakeet"} 1.0' in metrics
     assert 'hugging_voice_model_loads_total{model="qwen_tts"} 1.0' in metrics
+    assert 'hugging_voice_model_loads_total{model="smart_turn"} 1.0' in metrics
 
     realtime = RealtimeService(lifecycle)
     await realtime.start()
@@ -236,6 +271,9 @@ async def test_lifecycle_loads_each_runtime_once_and_reports_real_readiness(
         assert models["max_sessions"] == settings.server.max_sessions
         assert models["llama_parallel_slots"] == settings.models.llama_parallel_slots
         assert models["vad_min_silence_ms"] == settings.vad.min_silence_ms
+        assert models["semantic_turn_mode"] == "smart_turn_v3"
+        assert models["semantic_turn_threshold"] == 0.5
+        assert models["semantic_turn_fallback_silence_ms"] == 2_500
         assert (await client.get("/metrics")).status_code == 200
         metrics = (await client.get("/metrics")).text
         assert "hugging_voice_gpu_memory_bytes 123456.0" in metrics
@@ -243,7 +281,13 @@ async def test_lifecycle_loads_each_runtime_once_and_reports_real_readiness(
     await realtime.aclose()
     assert lifecycle.phase.value == LifecyclePhase.DRAINING.value
     await lifecycle.aclose()
-    assert (llama.stops, parakeet.closed, qwen.closed, gemma.closed) == (1, 1, 1, 1)
+    assert (
+        llama.stops,
+        parakeet.closed,
+        qwen.closed,
+        gemma.closed,
+        smart_turn.closed,
+    ) == (1, 1, 1, 1, 1)
 
 
 @pytest.mark.asyncio

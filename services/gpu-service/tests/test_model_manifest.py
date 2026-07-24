@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from hugging_voice_service.model_manifest import (
+    LockedFile,
     ManifestError,
     ModelLock,
     load_lock,
@@ -68,6 +69,7 @@ def test_real_manifest_has_exact_revisions_and_expected_models() -> None:
         "google/gemma-4-31B-it",
         "nvidia/parakeet-tdt-0.6b-v3",
         "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        "pipecat-ai/smart-turn-v3",
         "silero-vad",
     }
     hf_models = [model for model in manifest.models if model.delivery == "huggingface"]
@@ -80,6 +82,9 @@ def test_real_manifest_has_exact_revisions_and_expected_models() -> None:
         "qwen-talker-1.7b-base-BF16.gguf",
         "qwen-tokenizer-12hz-BF16.gguf",
     ]
+    smart_turn = next(model for model in hf_models if model.id == "pipecat-ai/smart-turn-v3")
+    assert smart_turn.revision == "f766f81d3cfdf7737ac64aad813d91bbfd56bf93"
+    assert [file.path for file in smart_turn.files] == ["smart-turn-v3.2-cpu.onnx"]
 
 
 def test_cuda_tts_profile_has_an_exact_explicit_offline_lock() -> None:
@@ -169,6 +174,7 @@ def test_startup_profiles_have_complete_matching_delivery_locks(
     profile_dir = REPO_ROOT / "models" / "profiles"
     manifest = load_manifest(profile_dir / f"{stem}.manifest.yaml")
     lock = load_lock(profile_dir / f"{stem}.lock.json")
+    locked_models = {model.id: model for model in lock.models}
     assert manifest.profile_id == lock.profile_id == stem
     assert {model.id for model in manifest.models} == {model.id for model in lock.models}
     expected_tts = (
@@ -185,8 +191,18 @@ def test_startup_profiles_have_complete_matching_delivery_locks(
         llm_model,
         "nvidia/parakeet-tdt-0.6b-v3",
         expected_tts,
+        "pipecat-ai/smart-turn-v3",
         *expected_packages,
     }
+    smart_turn = locked_models["pipecat-ai/smart-turn-v3"]
+    assert smart_turn.revision == "f766f81d3cfdf7737ac64aad813d91bbfd56bf93"
+    assert smart_turn.files == (
+        LockedFile(
+            path="smart-turn-v3.2-cpu.onnx",
+            size=8_679_182,
+            sha256="2bb026316b14a660486a75b1733cd3fbab8c2fd0314dc9af7be49f8cca967e4f",
+        ),
+    )
     assert all(
         file.size > 0 and len(file.sha256) == 64 for model in lock.models for file in model.files
     )

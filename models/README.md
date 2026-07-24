@@ -22,12 +22,18 @@ Silero is delivered by the exactly pinned `silero-vad==6.2.1` Python package. It
 lock entry is verified against installed package metadata rather than fetched with
 `torch.hub`.
 
+Smart Turn is delivered as the pinned `smart-turn-v3.2-cpu.onnx` artifact from
+`pipecat-ai/smart-turn-v3`. The service verifies its exact revision, byte size,
+and SHA-256 before constructing one CPU-only ONNX Runtime session. There is no
+runtime Hub resolution or GPU execution-provider fallback.
+
 Version 0.3 complete candidate startup manifests and locks live under
 `profiles/`:
 
 - `multisession_gemma_a4b_qwen06_cuda`
 - `multisession_qwen_a3b_qwen06_cuda`
 
-Each contains exactly one LLM, the shared Parakeet model, Qwen3-TTS 0.6B CUDA
-artifacts, and pinned runtime packages. The smaller component locks in that
-directory are provenance inputs only; runtime never combines locks or falls back.
+Each contains exactly one LLM, the shared Smart Turn and Parakeet models,
+Qwen3-TTS 0.6B CUDA artifacts, and pinned runtime packages. The smaller component
+locks in that directory are provenance inputs only; runtime never combines locks
+or falls back.

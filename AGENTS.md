@@ -12,8 +12,8 @@ French, and Italian. Version 0.3 retains the compatibility baseline and adds a
 small set of measured startup-only performance profiles:
 
 `LiveKit RealtimeModel plugin -> authenticated WebSocket -> per-session Silero
-VAD -> shared Parakeet TDT 0.6B v3 -> one local llama.cpp chat model -> bounded
-shared Qwen3-TTS runtime pool`.
+VAD -> shared CPU-only Smart Turn v3.2 -> shared Parakeet TDT 0.6B v3 -> one
+local llama.cpp chat model -> bounded shared Qwen3-TTS runtime pool`.
 
 The compatibility profile remains Gemma 4 31B IT with Qwen3-TTS 1.7B. Candidate
 multi-session profiles are limited to Gemma 4 26B A4B IT or
@@ -68,10 +68,17 @@ process startup. There is no hot swap or automatic fallback.
   child process.
 - A service lifecycle loads exactly one Parakeet runtime, one selected LLM runtime
   (one llama-server with a bounded operator-configured sequence-slot count), and
-  a bounded pool of one or two selected Qwen runtimes. Three or four TTS workers
-  are benchmark-only in version 0.3. Concurrent sessions must never be implemented
+  a bounded pool of one or two selected Qwen runtimes. When semantic endpointing
+  is enabled it also loads exactly one shared CPU-only Smart Turn v3.2 ONNX
+  runtime. Three or four TTS workers are benchmark-only in version 0.3.
+  Concurrent sessions must never be implemented
   as complete model pipelines. Per-session stateful Silero VAD instances are
   allowed.
+- Silero produces an endpoint candidate after the configured short pause.
+  Smart Turn decides whether the utterance is complete from at most the last
+  eight seconds of audio. Incomplete turns stay open until speech resumes or the
+  bounded hard-silence fallback expires. Candidate jobs are bounded, fair,
+  revision-aware, and never block the asyncio event loop.
 - Connected-session admission, llama.cpp sequence slots, and total llama.cpp
   context are bounded operator configuration with compatibility defaults of two
   sessions, two slots, and 32768 tokens. These defaults are not a measured

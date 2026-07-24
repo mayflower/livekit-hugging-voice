@@ -361,6 +361,7 @@ class SessionCreatedEvent(EventBase):
     type: Literal["session.created"] = "session.created"
     models: SessionModels
     revisions: ModelRevisions
+    turn_detection: ServerVADConfig = Field(default_factory=ServerVADConfig)
     language: LanguageCode = "de"
     voice: VoiceId = "warm_female"
     supported_languages: tuple[LanguageCode, ...] = Field(

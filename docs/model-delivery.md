@@ -10,6 +10,8 @@ GGUF conversions from `Serveurperso/Qwen3-TTS-GGUF`: the base talker (default
 `voice_clone` mode) plus the shared 12 Hz codec; the VoiceDesign talker is
 fetched only when an operator adds it to the manifest for `voice_design` mode.
 The logical model is `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
+Smart Turn uses the exact quantized v3.2 CPU ONNX artifact from
+`pipecat-ai/smart-turn-v3`; it is prefetched and locked like every other weight.
 
 ## Prefetch
 
@@ -47,8 +49,9 @@ uv run hugging-voice-model-verify \
 
 Verification performs no network operation. It rejects missing files, changed
 sizes, hash mismatches, unsafe paths, missing Silero installation, or a Silero
-version other than 6.2.1. Wave 2 makes this verification a startup prerequisite
-before any model constructor runs.
+version other than 6.2.1. Smart Turn is loaded only from its verified local ONNX
+path with `CPUExecutionProvider`. Verification is a startup prerequisite before
+any model constructor runs.
 
 Parakeet's checkpoint is opened directly. Compatibility Qwen uses
 `GGMLQwen3TTS.from_gguf` with verified files; the CUDA candidate calls
@@ -63,5 +66,5 @@ pods.
 
 Version 0.3 candidate sources and hashes are recorded in
 `docs/performance/llm-candidate-artifacts.md`. Selecting a candidate requires a
-complete profile lock containing that LLM, Parakeet, the selected TTS artifacts,
-and pinned Python packages.
+complete profile lock containing that LLM, Smart Turn, Parakeet, the selected TTS
+artifacts, and pinned Python packages.

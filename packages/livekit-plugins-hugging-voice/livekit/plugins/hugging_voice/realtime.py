@@ -41,6 +41,7 @@ from hugging_voice_protocol.events import (
     ResponseOutputTextDoneEvent,
     ResponseSpeakEvent,
     ServerEvent,
+    ServerVADConfig,
     SessionConfig,
     SessionCreatedEvent,
     SessionUpdatedEvent,
@@ -320,6 +321,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         self._language = model._language
         self._voice = model._voice
         self._voice_instructions = model._voice_instructions
+        self._turn_detection = ServerVADConfig()
         self._outbound: asyncio.Queue[_Command | object] = asyncio.Queue(OUTBOUND_QUEUE_SIZE)
         self._audio_input: asyncio.Queue[rtc.AudioFrame | _AudioControl | object] = asyncio.Queue(
             INPUT_AUDIO_QUEUE_SIZE
@@ -663,6 +665,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                 self._language = created.language
             if self._voice is None:
                 self._voice = created.voice
+            self._turn_detection = created.turn_detection
             self._sequence = 0
             await self._send_direct_with_ack(self._session_update_event(), ws)
             for item in self._chat_ctx.items:
@@ -1436,6 +1439,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                 if not utils.is_given(voice_instructions)
                 else voice_instructions
             ),
+            turn_detection=self._turn_detection,
         )
 
     def _restore_tool_choice(self, candidate: ToolChoice, previous: ToolChoice) -> None:
