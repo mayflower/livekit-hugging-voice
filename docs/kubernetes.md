@@ -79,3 +79,11 @@ The resolver handles A and AAAA answers, queries authenticated `/v1/capacity` wi
 a short bounded cache, and randomizes equally free pods. Capacity lookup is only
 an optimization: the atomic WebSocket slot claim is authoritative, and 4429 makes
 the plugin try the next endpoint. A connected session is never migrated.
+
+The base ConfigMap intentionally remains the unmeasured compatibility profile.
+Candidate four-session ConfigMaps are rendered from the complete files under
+`services/gpu-service/config/profiles/` and paired with their matching model
+lock. Readiness remains red until offline verification, the selected LLM's
+two-step tool probe, and every configured TTS-worker warmup all succeed.
+Horizontal capacity continues to come from additional one-GPU pods; this version
+adds neither central session state nor an HPA.

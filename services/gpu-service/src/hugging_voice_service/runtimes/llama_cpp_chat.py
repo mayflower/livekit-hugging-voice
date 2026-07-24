@@ -1,4 +1,4 @@
-"""Streaming client for the one local Gemma 4 llama-server process."""
+"""Streaming client for the one selected local llama.cpp chat profile."""
 
 from __future__ import annotations
 
@@ -19,6 +19,8 @@ from hugging_voice_protocol.events import (
     ToolChoice,
     canonical_json,
 )
+
+from ..llm_profiles import LLMProfile, resolve_llm_profile
 
 BASE_PROMPT = (
     "You are having a spoken conversation. Respond naturally and directly. "
@@ -96,6 +98,46 @@ class TextUsage:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+
+
+def _resolve_max_tokens(value: int | None, *, tool_decision: bool) -> int:
+    resolved = value or (128 if tool_decision else 256)
+    if not 1 <= resolved <= 512:
+        raise ValueError("Gemma max_tokens must be between 1 and 512")
+    return resolved
+
+
+def _request_messages(
+    *,
+    messages: Sequence[GemmaMessage],
+    instructions: str,
+    language_instruction: str,
+    system_prompt: str,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+    if language_instruction.strip():
+        result.append({"role": "system", "content": language_instruction})
+    if instructions.strip():
+        result.append({"role": "system", "content": instructions})
+    result.extend(message.as_payload() for message in messages)
+    return result
+
+
+def _tool_fields(
+    tools: Sequence[FunctionTool],
+    tool_choice: ToolChoice,
+) -> dict[str, Any]:
+    if not tools:
+        return {}
+    return {
+        "tools": [tool.model_dump(mode="json") for tool in tools],
+        "tool_choice": (
+            tool_choice.model_dump(mode="json")
+            if isinstance(tool_choice, NamedToolChoice)
+            else tool_choice
+        ),
+        "parallel_tool_calls": False,
+    }
 
 
 class _VisibleTextFilter:
@@ -229,14 +271,14 @@ class _ToolCallAccumulator:
         return ToolCall(call_id=call_id, name=self._name, arguments=arguments)
 
 
-class GemmaRuntime:
-    model_id = "google/gemma-4-31B-it"
+class LlamaCppChatRuntime:
     provider = "llama.cpp"
 
     def __init__(
         self,
         *,
         port: int,
+        profile: LLMProfile | None = None,
         parallel_slots: int = 2,
         session: aiohttp.ClientSession | None = None,
         request_timeout: float = 120.0,
@@ -246,6 +288,8 @@ class GemmaRuntime:
         if not 1 <= parallel_slots <= 64:
             raise ValueError("parallel_slots must be between 1 and 64")
         self._base_url = f"http://127.0.0.1:{port}"
+        self.profile = profile or resolve_llm_profile("compat_gemma31")
+        self.model_id = self.profile.model_id
         self._session = session
         self._owns_session = session is None
         self._request_timeout = request_timeout
@@ -264,7 +308,54 @@ class GemmaRuntime:
             if isinstance(event, TextDelta):
                 visible += event.text
         if not visible.strip():
-            raise GemmaRuntimeError("Gemma warmup returned no visible text")
+            raise GemmaRuntimeError("llama.cpp chat warmup returned no visible text")
+
+    async def prefill(
+        self,
+        *,
+        instructions: str = "",
+        language_instruction: str = "Respond in clear, natural German.",
+        system_prompt: str = BASE_PROMPT,
+        tools: Sequence[FunctionTool] = (),
+        tool_choice: ToolChoice = "auto",
+        slot_id: int = 0,
+    ) -> int:
+        """Populate one fixed llama.cpp slot cache without generating a token."""
+
+        self._validate_request(tools=tools, tool_choice=tool_choice, slot_id=slot_id)
+        payload: dict[str, Any] = {
+            "model": self.profile.llama_server_alias,
+            "messages": _request_messages(
+                messages=(),
+                instructions=instructions,
+                language_instruction=language_instruction,
+                system_prompt=system_prompt,
+            ),
+            "stream": False,
+            "max_tokens": 0,
+            "temperature": 0,
+            "cache_prompt": True,
+            "id_slot": slot_id,
+            **_tool_fields(tools, tool_choice),
+        }
+        if self.profile.chat_template_kwargs:
+            payload["chat_template_kwargs"] = dict(self.profile.chat_template_kwargs)
+        async with self._semaphore:
+            session = self._ensure_session()
+            async with session.post(
+                f"{self._base_url}/v1/chat/completions",
+                json=payload,
+            ) as response:
+                body = await response.text()
+                if response.status != 200:
+                    raise GemmaRuntimeError(
+                        f"llama-server prefix prefill failed status={response.status}"
+                    )
+        try:
+            result = json.loads(body)
+            return int((result.get("usage") or {}).get("prompt_tokens", 0))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise GemmaRuntimeError("llama-server prefix prefill returned invalid JSON") from exc
 
     async def stream_response(
         self,
@@ -276,42 +367,31 @@ class GemmaRuntime:
         tools: Sequence[FunctionTool] = (),
         tool_choice: ToolChoice = "auto",
         slot_id: int = 0,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[TextDelta | ToolCall | TextUsage]:
-        if not 0 <= slot_id < self._parallel_slots:
-            raise ValueError(f"Gemma slot_id must be between 0 and {self._parallel_slots - 1}")
-        if isinstance(tool_choice, NamedToolChoice):
-            named = tool_choice.function.name
-            if named not in {tool.function.name for tool in tools}:
-                raise ValueError("named tool choice references an unknown tool")
-        if tool_choice == "required" and not tools:
-            raise ValueError("tool_choice='required' requires tools")
-
-        request_messages = [{"role": "system", "content": system_prompt}]
-        if language_instruction.strip():
-            request_messages.append({"role": "system", "content": language_instruction})
-        if instructions.strip():
-            request_messages.append({"role": "system", "content": instructions})
-        request_messages.extend(message.as_payload() for message in messages)
+        self._validate_request(tools=tools, tool_choice=tool_choice, slot_id=slot_id)
         tool_decision = bool(tools) and tool_choice != "none"
+        resolved_max_tokens = _resolve_max_tokens(max_tokens, tool_decision=tool_decision)
         payload: dict[str, Any] = {
-            "model": "gemma-4-31b",
-            "messages": request_messages,
+            "model": self.profile.llama_server_alias,
+            "messages": _request_messages(
+                messages=messages,
+                instructions=instructions,
+                language_instruction=language_instruction,
+                system_prompt=system_prompt,
+            ),
             "stream": True,
             "stream_options": {"include_usage": True},
-            "max_tokens": 128 if tool_decision else 256,
-            "temperature": 0.2 if tool_decision else 0.7,
+            "max_tokens": resolved_max_tokens,
+            "temperature": (
+                self.profile.tool_temperature if tool_decision else self.profile.reply_temperature
+            ),
             "cache_prompt": True,
             "id_slot": slot_id,
-            "chat_template_kwargs": {"enable_thinking": False},
+            **_tool_fields(tools, tool_choice),
         }
-        if tools:
-            payload["tools"] = [tool.model_dump(mode="json") for tool in tools]
-            payload["tool_choice"] = (
-                tool_choice.model_dump(mode="json")
-                if isinstance(tool_choice, NamedToolChoice)
-                else tool_choice
-            )
-            payload["parallel_tool_calls"] = False
+        if self.profile.chat_template_kwargs:
+            payload["chat_template_kwargs"] = dict(self.profile.chat_template_kwargs)
 
         async with self._semaphore:
             session = self._ensure_session()
@@ -326,10 +406,8 @@ class GemmaRuntime:
                     json=payload,
                 )
                 if response.status != 200:
-                    body = await response.text()
-                    raise GemmaRuntimeError(
-                        f"llama-server request failed status={response.status} body={body[:512]!r}"
-                    )
+                    await response.read()
+                    raise GemmaRuntimeError(f"llama-server request failed status={response.status}")
                 while True:
                     line = await asyncio.wait_for(
                         response.content.readline(), timeout=self._idle_timeout
@@ -400,6 +478,22 @@ class GemmaRuntime:
         if self._owns_session and self._session is not None:
             await self._session.close()
         self._session = None
+
+    def _validate_request(
+        self,
+        *,
+        tools: Sequence[FunctionTool],
+        tool_choice: ToolChoice,
+        slot_id: int,
+    ) -> None:
+        if not 0 <= slot_id < self._parallel_slots:
+            raise ValueError(f"llama.cpp slot_id must be between 0 and {self._parallel_slots - 1}")
+        if isinstance(tool_choice, NamedToolChoice):
+            named = tool_choice.function.name
+            if named not in {tool.function.name for tool in tools}:
+                raise ValueError("named tool choice references an unknown tool")
+        if tool_choice == "required" and not tools:
+            raise ValueError("tool_choice='required' requires tools")
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None:

@@ -173,7 +173,7 @@ class ContractServer:
             ):
                 sent_transcription = True
                 await self._send_transcription(websocket)
-            elif event.type == "response.create":
+            elif event.type in {"response.create", "response.speak"}:
                 self._response_count += 1
                 if self.ignore_response:
                     continue
@@ -368,6 +368,127 @@ async def test_native_session_maps_transcription_text_audio_and_metrics(
         assert session.chat_ctx.get_by_id("item_input") is not None
         assert session.chat_ctx.get_by_id("item_assistant_1") is not None
         assert any(getattr(metric, "request_id", None) == "resp_1" for metric in metrics)
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_native_session_say_uses_protocol_response_lifecycle(
+    unused_tcp_port: int,
+) -> None:
+    server = ContractServer(unused_tcp_port, send_transcription=False)
+    await server.start()
+    model = RealtimeModel(
+        base_url=server.url,
+        token="contract-secret",
+        conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+    )
+    session = model.session()
+    try:
+        generation = await asyncio.wait_for(session.say("Ich prüfe das kurz."), timeout=1.0)
+        messages = [message async for message in generation.message_stream]
+        assert len(messages) == 1
+        assert "".join([delta async for delta in messages[0].text_stream]) == "Guten Tag. "
+        assert len([frame async for frame in messages[0].audio_stream]) == 1
+        event = await server.next_event()
+        assert event.type == "session.update"
+        event = await server.next_event()
+        assert event.type == "response.speak"
+        assert event.text == "Ich prüfe das kurz."
+        assert session.chat_ctx.get_by_id("item_assistant_1") is not None
+        assert model.capabilities.supports_say is True
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_native_session_say_rejects_empty_ssml_and_oversized_text(
+    unused_tcp_port: int,
+) -> None:
+    server = ContractServer(unused_tcp_port, send_transcription=False)
+    await server.start()
+    model = RealtimeModel(
+        base_url=server.url,
+        token="contract-secret",
+        conn_options=APIConnectOptions(max_retry=0, timeout=1.0),
+    )
+    session = model.session()
+    try:
+        with pytest.raises(RealtimeError, match="invalid say"):
+            session.say(" ")
+        with pytest.raises(RealtimeError, match="invalid say"):
+            session.say("<speak>Hello</speak>")
+        with pytest.raises(RealtimeError, match="invalid say"):
+            session.say("x" * 501)
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_streamed_say_is_cancelled_before_it_can_queue_after_timeout(
+    unused_tcp_port: int,
+) -> None:
+    server = ContractServer(unused_tcp_port, send_transcription=False)
+    await server.start()
+    model = RealtimeModel(
+        base_url=server.url,
+        token="contract-secret",
+        conn_options=APIConnectOptions(max_retry=0, timeout=0.05),
+    )
+    session = model.session()
+    collector_cancelled = asyncio.Event()
+
+    async def delayed_text() -> Any:
+        try:
+            await asyncio.Event().wait()
+            yield "too late"
+        finally:
+            collector_cancelled.set()
+
+    try:
+        update = await server.next_event()
+        assert update.type == "session.update"
+        with pytest.raises(RealtimeError, match=r"response\.created timed out"):
+            await session.say(delayed_text())
+        await asyncio.wait_for(collector_cancelled.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+        assert server.events.empty()
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_tool_filler_remains_visible_but_is_excluded_from_model_replay(
+    unused_tcp_port: int,
+) -> None:
+    @function_tool
+    async def add_numbers(a: int, b: int) -> str:
+        """Add two integers."""
+
+        return str(a + b)
+
+    server = ContractServer(unused_tcp_port, send_transcription=False, tool_first=True)
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    session = model.session()
+    try:
+        await session.update_tools([add_numbers])
+        generation = await asyncio.wait_for(session.generate_reply(), timeout=1.0)
+        calls = [call async for call in generation.function_stream]
+        assert len(calls) == 1
+
+        filler = await asyncio.wait_for(session.say("Ich prüfe das kurz."), timeout=1.0)
+        message = await anext(filler.message_stream.__aiter__())
+        assert "".join([delta async for delta in message.text_stream]) == "Guten Tag. "
+        assert len([frame async for frame in message.audio_stream]) == 1
+
+        filler_item = session.chat_ctx.get_by_id("item_assistant_2")
+        assert filler_item is not None
+        assert session._skip_invalidated_replay(filler_item)
     finally:
         await model.aclose()
         await server.close()

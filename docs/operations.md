@@ -8,8 +8,9 @@ active/available/draining/stuck sessions, rejections, runtime load counters,
 scheduler wait/inference durations, LLM/TTS first-output latency, stale chunks,
 WebSocket failures, and GPU memory.
 
-The runtime load counter for Gemma, Parakeet, and Qwen must remain exactly one per
-pod lifecycle. All admitted sessions share those runtimes but own separate VAD,
+The runtime load counters for the selected LLM and Parakeet must remain exactly
+one per pod lifecycle. The Qwen load counter must equal the configured worker
+count (one or two in production). All admitted sessions share those runtimes but own separate VAD,
 audio, conversation, cancellation, ID, output state, and llama.cpp slot.
 
 ## Drain and shutdown

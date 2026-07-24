@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import json
 import logging
 import time
 import uuid
@@ -37,6 +39,7 @@ from hugging_voice_protocol.events import (
     ResponseOutputTextDeltaEvent,
     ResponseOutputTextDoneEvent,
     ResponseReason,
+    ResponseSpeakEvent,
     ResponseStatus,
     SessionUpdatedEvent,
     SessionUpdateEvent,
@@ -47,13 +50,13 @@ from hugging_voice_protocol.events import (
 )
 
 from .cancellation import GenerationToken
-from .config import SpeechSettings
+from .config import SpeechSettings, TranscriptionSettings
 from .conversation import (
     ConversationRole,
     FunctionCallEntry,
     FunctionCallOutputEntry,
 )
-from .runtimes.gemma import (
+from .runtimes.llama_cpp_chat import (
     GemmaMessage,
     TextDelta,
     TextUsage,
@@ -61,7 +64,7 @@ from .runtimes.gemma import (
     ToolCallValidationError,
 )
 from .schedulers.stt import STTJob
-from .schedulers.tts import TTSJob
+from .schedulers.tts import TTSJob, TTSPriority
 from .sessions import SessionState
 from .telemetry import ServiceTelemetry
 from .text_segmenter import SpeechTextSegmenter
@@ -88,6 +91,7 @@ class GemmaStreamer(Protocol):
         tools: Sequence[Any] = (),
         tool_choice: Any = "auto",
         slot_id: int,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[TextDelta | ToolCall | TextUsage]: ...
 
 
@@ -132,6 +136,7 @@ class ResponseContext:
     tool_choice: ToolChoice
     started_at: float
     speech_stopped_at: float | None
+    direct_speak: bool = False
     text: str = ""
     audio_sequence: int = 0
     usage: TextUsage | None = None
@@ -151,7 +156,6 @@ class CompletedTurn:
 
 
 class VoicePipeline:
-    partial_interval_seconds = 0.5
     completed_turn_queue_size = 4
 
     def __init__(
@@ -162,6 +166,7 @@ class VoicePipeline:
         tts: TTSScheduling,
         gemma: GemmaStreamer,
         speech: SpeechSettings,
+        transcription: TranscriptionSettings | None = None,
         telemetry: ServiceTelemetry,
     ) -> None:
         self.state = state
@@ -169,10 +174,15 @@ class VoicePipeline:
         self._tts = tts
         self._gemma = gemma
         self._speech = speech
+        self._transcription = transcription or TranscriptionSettings()
         self._telemetry = telemetry
         self._response: ResponseContext | None = None
         self._response_task: asyncio.Task[None] | None = None
+        self._deferred_response_task: asyncio.Task[None] | None = None
         self._partial_task: asyncio.Task[None] | None = None
+        self._prefill_task: asyncio.Task[int] | None = None
+        self._prefill_key: str | None = None
+        self._generation_started = False
         self._completed_turn: tuple[str, int] | None = None
         self._completed_turns: asyncio.Queue[CompletedTurn] = asyncio.Queue(
             maxsize=self.completed_turn_queue_size
@@ -191,7 +201,13 @@ class VoicePipeline:
         return self._response
 
     async def wait_response_idle(self) -> None:
-        await self._response_idle.wait()
+        while True:
+            await self._response_idle.wait()
+            deferred = self._deferred_response_task
+            if deferred is None and self._response is None and self._response_idle.is_set():
+                return
+            if deferred is not None:
+                await asyncio.shield(deferred)
 
     async def wait_turns_idle(self) -> None:
         await self._turns_idle.wait()
@@ -219,6 +235,13 @@ class VoicePipeline:
                 response_instructions=event.instructions or "",
                 tools=event.tools,
                 tool_choice=event.tool_choice,
+                source_event_id=event.event_id,
+            )
+        elif isinstance(event, ResponseSpeakEvent):
+            await self._start_response(
+                response_instructions="",
+                direct_text=event.text,
+                source_event_id=event.event_id,
             )
         elif isinstance(event, ResponseCancelEvent):
             await self._cancel_response(
@@ -238,10 +261,20 @@ class VoicePipeline:
             self._partial_task.cancel()
             await asyncio.gather(self._partial_task, return_exceptions=True)
             self._partial_task = None
+        if self._prefill_task is not None:
+            self._prefill_task.cancel()
+            await asyncio.gather(self._prefill_task, return_exceptions=True)
+            self._prefill_task = None
+            self._prefill_key = None
         if self._turn_worker_task is not None:
             self._turn_worker_task.cancel()
             await asyncio.gather(self._turn_worker_task, return_exceptions=True)
             self._turn_worker_task = None
+        if self._deferred_response_task is not None:
+            self._deferred_response_task.cancel()
+            await asyncio.gather(self._deferred_response_task, return_exceptions=True)
+            if self._deferred_response_task is asyncio.current_task():
+                self._deferred_response_task = None
         while not self._completed_turns.empty():
             self._completed_turns.get_nowait()
             self._completed_turns.task_done()
@@ -281,10 +314,11 @@ class VoicePipeline:
         voice = config.voice or self._speech.default_voice
         self._speech.resolve_language(language)
         self._speech.resolve_voice(voice)
-        if self.state.tools_frozen and config.tools != self.state.tools:
+        tools = tuple(sorted(config.tools, key=lambda tool: tool.function.name))
+        if self.state.tools_frozen and tools != self.state.tools:
             raise PipelineEventError(
                 ErrorCode.INVALID_TOOL_CONFIGURATION,
-                "tools are immutable after the initial session update",
+                "tools are immutable after the initial model generation",
             )
         vad_configuration = (
             config.turn_detection.threshold,
@@ -310,10 +344,10 @@ class VoicePipeline:
             speech_pad_ms=config.turn_detection.speech_pad_ms,
         )
         self.state.instructions = config.instructions
-        self.state.tools = config.tools
+        self.state.tools = tools
         self.state.tool_choice = config.tool_choice
         self._telemetry.tool_schema_bytes.set(
-            sum(len(tool.model_dump_json().encode("utf-8")) for tool in config.tools)
+            sum(len(tool.model_dump_json().encode("utf-8")) for tool in tools)
         )
         self.state.language = language
         self.state.voice = voice
@@ -321,6 +355,13 @@ class VoicePipeline:
         self.state.vad_enabled = config.turn_detection.enabled
         self.state.transcription_enabled = config.input_audio_transcription
         self.state.interrupt_response = config.interrupt_response
+        if not self._generation_started:
+            await self._schedule_prefix_prefill(
+                instructions=self.state.instructions,
+                language_instruction=self._speech.resolve_language(language).response_instruction,
+                tools=self.state.tools,
+                tool_choice=self.state.tool_choice,
+            )
         await self.state.transport.send(
             SessionUpdatedEvent(
                 event_id=_id("evt"),
@@ -328,6 +369,92 @@ class VoicePipeline:
                 source_event_id=event.event_id,
             )
         )
+
+    async def _schedule_prefix_prefill(
+        self,
+        *,
+        instructions: str,
+        language_instruction: str,
+        tools: Sequence[FunctionTool],
+        tool_choice: ToolChoice,
+    ) -> None:
+        key = self._prefix_key(
+            instructions=instructions,
+            language_instruction=language_instruction,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+        if self._prefill_key == key and self._prefill_task is not None:
+            return
+        if self._prefill_task is not None:
+            self._prefill_task.cancel()
+            await asyncio.gather(self._prefill_task, return_exceptions=True)
+        self._prefill_key = key
+        self._prefill_task = asyncio.create_task(
+            self._run_prefix_prefill(
+                instructions=instructions,
+                language_instruction=language_instruction,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        )
+
+    async def _run_prefix_prefill(
+        self,
+        *,
+        instructions: str,
+        language_instruction: str,
+        tools: Sequence[FunctionTool],
+        tool_choice: ToolChoice,
+    ) -> int:
+        prefill = getattr(self._gemma, "prefill", None)
+        if prefill is None:
+            return 0
+        started = time.monotonic()
+        try:
+            tokens = int(
+                await prefill(
+                    instructions=instructions,
+                    language_instruction=language_instruction,
+                    system_prompt=self._speech.system_prompt,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    slot_id=self.state.slot.index,
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._telemetry.llm_prefix_prefill_failures.inc()
+            raise
+        self._telemetry.llm_prefix_prefill_seconds.observe(time.monotonic() - started)
+        self._telemetry.llm_prefix_prefill_tokens.observe(tokens)
+        return tokens
+
+    def _prefix_key(
+        self,
+        *,
+        instructions: str,
+        language_instruction: str,
+        tools: Sequence[FunctionTool],
+        tool_choice: ToolChoice,
+    ) -> str:
+        choice: Any = (
+            tool_choice if isinstance(tool_choice, str) else tool_choice.model_dump(mode="json")
+        )
+        material = {
+            "system_prompt": self._speech.system_prompt,
+            "language_instruction": language_instruction,
+            "instructions": instructions,
+            "tools": [
+                tool.model_dump(mode="json")
+                for tool in sorted(tools, key=lambda item: item.function.name)
+            ],
+            "tool_choice": choice,
+            "slot_id": self.state.slot.index,
+        }
+        canonical = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     async def _append_audio(self, event: InputAudioBufferAppendEvent) -> None:
         if event.sequence != self.state.next_audio_sequence:
@@ -398,8 +525,11 @@ class VoicePipeline:
         await self._complete_turn(turn_id, revision, start, sample_index)
 
     def _schedule_partial(self) -> None:
+        if not self._transcription.partial_enabled:
+            return
         now = time.monotonic()
-        if now - self.state.last_partial_at < self.partial_interval_seconds:
+        interval_seconds = self._transcription.partial_interval_ms / 1_000
+        if now - self.state.last_partial_at < interval_seconds:
             return
         if self._partial_task is not None and not self._partial_task.done():
             return
@@ -409,11 +539,13 @@ class VoicePipeline:
             return
         revision = self.state.current_turn_revision
         epoch = self.state.partial_epoch
-        audio = self.state.input_audio_buffer.slice_samples(
-            start,
-            self.state.input_audio_buffer.end_sample,
-        )
+        end = self.state.input_audio_buffer.end_sample
+        max_samples = self._transcription.partial_max_audio_ms * 16
+        window_start = max(start, end - max_samples)
+        audio = self.state.input_audio_buffer.slice_samples(window_start, end)
         self.state.last_partial_at = now
+        self._telemetry.partial_jobs_submitted.inc()
+        self._telemetry.partial_audio_seconds.inc(len(audio) / (16_000 * 2))
         self._partial_task = asyncio.create_task(self._run_partial(turn_id, revision, epoch, audio))
 
     async def _run_partial(self, turn_id: str, revision: int, epoch: int, audio: bytes) -> None:
@@ -436,6 +568,8 @@ class VoicePipeline:
                     is_stale=stale,
                 )
             )
+            if transcript is None:
+                self._telemetry.partial_jobs_dropped.inc()
             if transcript and not stale() and self.state.transcription_enabled:
                 await self.state.transport.send(
                     InputTranscriptionDeltaEvent(
@@ -521,6 +655,7 @@ class VoicePipeline:
             return self._draining
 
         started = time.monotonic()
+        self._telemetry.final_audio_seconds.inc(len(completed.audio) / (16_000 * 2))
         transcript = await self._stt.submit_final(
             STTJob(
                 session_id=self.state.session_id,
@@ -595,7 +730,9 @@ class VoicePipeline:
         self.state.speech_start_sample = None
 
     async def _create_conversation_item(self, event: ConversationItemCreateEvent) -> None:
-        if self._response is not None:
+        if self._response is not None and not (
+            self._response.direct_speak and event.item.type == "function_call_output"
+        ):
             raise PipelineEventError(
                 ErrorCode.TOOL_CALL_STATE_CONFLICT,
                 "cannot update conversation while a response is active",
@@ -715,15 +852,31 @@ class VoicePipeline:
         tools: Sequence[Any] | None = None,
         tool_choice: Any | None = None,
         speech_stopped_at: float | None = None,
+        direct_text: str | None = None,
+        source_event_id: str | None = None,
     ) -> None:
         if self._response is not None:
+            if direct_text is None and self._response.direct_speak:
+                if self._deferred_response_task is not None:
+                    raise ValueError("a response is already deferred for this session")
+                self._deferred_response_task = asyncio.create_task(
+                    self._start_response_after_direct_speak(
+                        response_instructions=response_instructions,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        speech_stopped_at=speech_stopped_at,
+                        source_event_id=source_event_id,
+                    )
+                )
+                return
             raise ValueError("a response is already active for this session")
-        if self.state.pending_call is not None:
+        if direct_text is None and self.state.pending_call is not None:
             raise PipelineEventError(
                 ErrorCode.TOOL_CALL_STATE_CONFLICT,
                 "pending tool call requires a confirmed output before another response",
             )
-        self.state.tools_frozen = True
+        if direct_text is None:
+            self.state.tools_frozen = True
         if self.state.current_turn_id is None:
             self.state.current_turn_revision += 1
             self.state.current_turn_id = _id("turn")
@@ -770,7 +923,16 @@ class VoicePipeline:
             speech_stopped_at=(
                 self._speech_stopped_at if speech_stopped_at is None else speech_stopped_at
             ),
+            direct_speak=direct_text is not None,
         )
+        if direct_text is None and not self._generation_started:
+            await self._schedule_prefix_prefill(
+                instructions=context.instructions,
+                language_instruction=context.language_instruction,
+                tools=context.tools,
+                tool_choice=context.tool_choice,
+            )
+            self._generation_started = True
         self._response = context
         self._response_idle.clear()
         self.state.current_generation_id = generation_id
@@ -780,16 +942,137 @@ class VoicePipeline:
                 **self._response_fields(context),
             )
         )
-        self._response_task = asyncio.create_task(self._run_response(context))
+        self._response_task = asyncio.create_task(
+            self._run_response(context)
+            if direct_text is None
+            else self._run_speak_response(context, direct_text)
+        )
+
+    async def _start_response_after_direct_speak(
+        self,
+        *,
+        response_instructions: str,
+        tools: Sequence[Any] | None,
+        tool_choice: Any | None,
+        speech_stopped_at: float | None,
+        source_event_id: str | None,
+    ) -> None:
+        try:
+            await self._response_idle.wait()
+            if self._draining:
+                return
+            await self._start_response(
+                response_instructions=response_instructions,
+                tools=tools,
+                tool_choice=tool_choice,
+                speech_stopped_at=speech_stopped_at,
+                source_event_id=source_event_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.send_error(
+                ErrorCode.TOOL_CALL_STATE_CONFLICT,
+                str(exc) or type(exc).__name__,
+                source_event_id=source_event_id,
+            )
+        finally:
+            self._deferred_response_task = None
+
+    async def _run_speak_response(self, context: ResponseContext, text: str) -> None:
+        segments: asyncio.Queue[str | None] = asyncio.Queue(maxsize=8)
+        tts_task: asyncio.Task[None] | None = None
+        try:
+            context.text = text
+            await self.state.transport.send(
+                ResponseOutputTextDeltaEvent(
+                    **self._response_fields(context),
+                    delta=text,
+                )
+            )
+            await self._send_text_done(context)
+            segmentation = self._speech.segmentation
+            segmenter = SpeechTextSegmenter(
+                first_segment_characters=segmentation.first_segment_max_characters,
+                next_segment_characters=segmentation.next_segment_max_characters,
+                hard_max_characters=segmentation.hard_max_characters,
+            )
+            for segment in (*segmenter.feed(text), *segmenter.flush()):
+                await segments.put(segment)
+            await segments.put(None)
+            tts_task = asyncio.create_task(
+                self._run_tts(
+                    context,
+                    segments,
+                    priority="filler_or_explicit_say",
+                )
+            )
+            await tts_task
+            await self._send_audio_done(context)
+            await self._finalize_response(
+                context,
+                status=ResponseStatus.COMPLETED,
+                reason=ResponseReason.COMPLETED,
+            )
+            # A tool call and its result remain one atomic model-context group.
+            # LiveKit still exposes the filler in its chat context, but the
+            # service does not insert it between a pending call and its output.
+            if self.state.pending_call is None:
+                self.state.conversation.append(
+                    item_id=context.item_id,
+                    role="assistant",
+                    content=text,
+                )
+        except asyncio.CancelledError:
+            if tts_task is not None:
+                tts_task.cancel()
+                await asyncio.gather(tts_task, return_exceptions=True)
+            await self._send_text_done(context)
+            await self._send_audio_done(context)
+            await self._finalize_response(
+                context,
+                status=ResponseStatus.CANCELLED,
+                reason=context.cancel_reason,
+            )
+        except Exception as exc:
+            if tts_task is not None:
+                tts_task.cancel()
+                await asyncio.gather(tts_task, return_exceptions=True)
+            await self.send_error(ErrorCode.MODEL_FAILURE, str(exc) or type(exc).__name__)
+            await self._send_text_done(context)
+            await self._send_audio_done(context)
+            await self._finalize_response(
+                context,
+                status=ResponseStatus.FAILED,
+                reason=ResponseReason.MODEL_ERROR,
+            )
+        finally:
+            if self._response is context:
+                self._response = None
+                self._response_task = None
+                self.state.current_generation_id = None
+                self.state.current_response_id = None
+                self._response_idle.set()
 
     async def _run_response(self, context: ResponseContext) -> None:
         segments: asyncio.Queue[str | None] = asyncio.Queue(maxsize=8)
         tts_task: asyncio.Task[None] | None = None
-        segmenter = SpeechTextSegmenter()
+        segmentation = self._speech.segmentation
+        segmenter = SpeechTextSegmenter(
+            first_segment_characters=segmentation.first_segment_max_characters,
+            next_segment_characters=segmentation.next_segment_max_characters,
+            hard_max_characters=segmentation.hard_max_characters,
+        )
         first_text_at: float | None = None
         function_call: ToolCall | None = None
         self._telemetry.llm_jobs_active.inc()
         try:
+            if self._prefill_task is not None:
+                wait_started = time.monotonic()
+                await self._prefill_task
+                self._telemetry.llm_first_turn_wait_for_prefill_seconds.observe(
+                    time.monotonic() - wait_started
+                )
             async for event in self._gemma.stream_response(
                 messages=self.state.conversation.messages(),
                 instructions=context.instructions,
@@ -798,6 +1081,11 @@ class VoicePipeline:
                 tools=context.tools,
                 tool_choice=context.tool_choice,
                 slot_id=self.state.slot.index,
+                max_tokens=(
+                    self._speech.llm.tool_decision_max_tokens
+                    if context.tools and context.tool_choice != "none"
+                    else self._speech.llm.voice_reply_max_tokens
+                ),
             ):
                 if not self.state.cancellation.is_current(context.token):
                     self._telemetry.stale_chunks_dropped.inc()
@@ -947,7 +1235,11 @@ class VoicePipeline:
         self,
         context: ResponseContext,
         segments: asyncio.Queue[str | None],
+        *,
+        priority: TTSPriority = "final_response",
     ) -> None:
+        job: TTSJob
+
         async def send_frame(frame: bytes) -> None:
             if not self.state.cancellation.is_current(context.token):
                 self._telemetry.stale_chunks_dropped.inc()
@@ -964,6 +1256,7 @@ class VoicePipeline:
                 ResponseOutputAudioDeltaEvent(
                     **self._response_fields(context),
                     sequence=context.audio_sequence,
+                    tts_worker_id=job.worker_id,
                     audio=base64.b64encode(frame).decode("ascii"),
                 )
             )
@@ -973,18 +1266,18 @@ class VoicePipeline:
             segment = await segments.get()
             if segment is None:
                 return
-            await self._tts.synthesize(
-                TTSJob(
-                    token=context.token,
-                    text=segment,
-                    language=context.model_language,
-                    instructions=context.voice_instructions,
-                    ref_audio=context.voice_ref_audio,
-                    ref_text=context.voice_ref_text,
-                    is_current=lambda: self.state.cancellation.is_current(context.token),
-                    on_frame=send_frame,
-                )
+            job = TTSJob(
+                token=context.token,
+                text=segment,
+                language=context.model_language,
+                instructions=context.voice_instructions,
+                ref_audio=context.voice_ref_audio,
+                ref_text=context.voice_ref_text,
+                priority=priority,
+                is_current=lambda: self.state.cancellation.is_current(context.token),
+                on_frame=send_frame,
             )
+            await self._tts.synthesize(job)
 
     async def _cancel_response(
         self,
@@ -1075,7 +1368,11 @@ class VoicePipeline:
             )
         )
         self.state.cancellation.finish(context.token)
-        if reason is not ResponseReason.TOOL_CALL and self.state.tool_result_ack_at is not None:
+        if (
+            reason is not ResponseReason.TOOL_CALL
+            and not context.direct_speak
+            and self.state.tool_result_ack_at is not None
+        ):
             self.state.tool_result_ack_at = None
             self.state.pending_call_emitted_at = None
         if usage.completion_tokens > 0:

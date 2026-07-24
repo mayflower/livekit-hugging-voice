@@ -9,7 +9,7 @@ import pytest
 from hugging_voice_service.config import load_settings
 from hugging_voice_service.lifecycle import ServiceLifecycle
 from hugging_voice_service.pipeline import GemmaStreamer
-from hugging_voice_service.runtimes.gemma import GemmaMessage, TextDelta
+from hugging_voice_service.runtimes.llama_cpp_chat import GemmaMessage, TextDelta
 from hugging_voice_service.schedulers.stt import STTRuntime
 from hugging_voice_service.schedulers.tts import TTSRuntime
 from hugging_voice_service.text_segmenter import SpeechTextSegmenter

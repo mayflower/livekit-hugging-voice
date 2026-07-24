@@ -1,6 +1,6 @@
 # Native tool calling
 
-Version 0.2 keeps tool execution in the LiveKit worker. Gemma receives bounded
+Version 0.3 keeps tool execution in the LiveKit worker. The selected LLM receives bounded
 function schemas and may return one structured function call. The GPU service
 finishes that generation without text or audio; the plugin exposes the call only
 after `response.done(reason=tool_call)`. LiveKit executes the registered Python
@@ -20,6 +20,11 @@ not a system instruction.
 
 The example worker registers an `add_numbers` FunctionTool. A tool generation
 itself is silent; only Gemma's answer after the acknowledged result is synthesized.
+
+A tool may explicitly call `run_ctx.session.say("Ich prüfe das kurz.")`.
+The plugin sends bounded `response.speak`; the service performs TTS directly with
+the `filler_or_explicit_say` priority and no LLM inference. The service never
+chooses such filler text itself, and queued final answers retain priority.
 
 Protocol v2 uses the existing `/v1/realtime` URL with WebSocket subprotocol
 `hugging-voice-livekit.v2`. It intentionally has no v1 compatibility mode.

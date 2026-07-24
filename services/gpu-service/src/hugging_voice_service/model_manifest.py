@@ -18,6 +18,7 @@ SHA256_PATTERN = r"^[0-9a-f]{64}$"
 COMMIT_PATTERN = r"^[0-9a-f]{40}$"
 PACKAGE_VERSION_PATTERN = r"^[0-9]+\.[0-9]+\.[0-9]+(?:[a-zA-Z0-9.-]+)?$"
 MODEL_ID_PATTERN = r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+PROFILE_ID_PATTERN = r"^[a-z][a-z0-9_-]{2,63}$"
 
 
 class ManifestError(ValueError):
@@ -69,6 +70,7 @@ ModelSpec = Annotated[
 
 class ModelManifest(StrictModel):
     schema_version: Literal[1] = 1
+    profile_id: str = Field(pattern=PROFILE_ID_PATTERN)
     models: tuple[ModelSpec, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -112,6 +114,7 @@ class LockedModel(StrictModel):
 
 class ModelLock(StrictModel):
     schema_version: Literal[1] = 1
+    profile_id: str = Field(pattern=PROFILE_ID_PATTERN)
     models: tuple[LockedModel, ...] = Field(min_length=1)
 
     @model_validator(mode="after")

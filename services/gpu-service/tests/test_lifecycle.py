@@ -87,7 +87,14 @@ def make_settings_and_lock(tmp_path: Path) -> ServiceSettings:
             id="google/gemma-4-31B-it",
             source_repo="ggml-org/gemma-4-31B-it-GGUF",
             revision=REVISION,
-            files=(locked_file(root, "google/gemma-4-31B-it", "gemma.gguf", b"gemma"),),
+            files=(
+                locked_file(
+                    root,
+                    "google/gemma-4-31B-it",
+                    "gemma-4-31B-it-Q4_0.gguf",
+                    b"gemma",
+                ),
+            ),
             license="Apache-2.0",
         ),
         LockedModel(
@@ -142,7 +149,15 @@ def make_settings_and_lock(tmp_path: Path) -> ServiceSettings:
         ),
     )
     lock_path = tmp_path / "manifest.lock.json"
-    lock_path.write_text(render_lock(ModelLock(models=models)), encoding="utf-8")
+    lock_path.write_text(
+        render_lock(
+            ModelLock(
+                profile_id="compat_gemma31_qwen17_ggml",
+                models=models,
+            )
+        ),
+        encoding="utf-8",
+    )
     binary = tmp_path / "llama-server"
     binary.write_bytes(b"binary")
     token_file = tmp_path / "token"
@@ -187,8 +202,8 @@ async def test_lifecycle_loads_each_runtime_once_and_reports_real_readiness(
         cuda_probe=lambda: None,
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: parakeet,
-        qwen_factory=lambda talker, codec, speech: qwen,
-        gemma_factory=lambda port, slots, violation: gemma,
+        qwen_factory=lambda talker, codec, speech, tts: qwen,
+        gemma_factory=lambda port, slots, profile, violation: gemma,
         gpu_memory_probe=lambda: 123_456,
     )
     await lifecycle.start()
@@ -215,8 +230,12 @@ async def test_lifecycle_loads_each_runtime_once_and_reports_real_readiness(
                 headers={"Authorization": "Bearer test-secret"},
             )
         ).json()
+        assert models["profile_id"] == settings.profile_id
         assert models["llama_cpp_commit"] == settings.models.llama_cpp_commit
         assert models["quantization"] == "Q4_0"
+        assert models["max_sessions"] == settings.server.max_sessions
+        assert models["llama_parallel_slots"] == settings.models.llama_parallel_slots
+        assert models["vad_min_silence_ms"] == settings.vad.min_silence_ms
         assert (await client.get("/metrics")).status_code == 200
         metrics = (await client.get("/metrics")).text
         assert "hugging_voice_gpu_memory_bytes 123456.0" in metrics
@@ -267,6 +286,28 @@ async def test_missing_cuda_fails_before_any_model_constructor(
 
 
 @pytest.mark.asyncio
+async def test_profile_lock_mismatch_fails_before_verification_or_model_load(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings_and_lock(tmp_path).model_copy(
+        update={"profile_id": "multisession_gemma_a4b_qwen06_cuda"}
+    )
+    constructed = 0
+
+    def forbidden_factory(*args: object) -> FakeLlama:
+        nonlocal constructed
+        constructed += 1
+        return FakeLlama()
+
+    lifecycle = ServiceLifecycle(settings, llama_factory=forbidden_factory)
+    await lifecycle.start()
+
+    assert lifecycle.phase is LifecyclePhase.FAILED
+    assert "model lock profile mismatch" in (lifecycle.error or "")
+    assert constructed == 0
+
+
+@pytest.mark.asyncio
 async def test_missing_auth_secret_fails_before_model_verification(tmp_path: Path) -> None:
     settings = ServiceSettings(
         server=ServerSettings(token_file=tmp_path / "missing-token"),
@@ -299,8 +340,8 @@ async def test_warmup_failure_cleans_started_resources_and_stays_unready(
         cuda_probe=lambda: None,
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: parakeet,
-        qwen_factory=lambda talker, codec, speech: qwen,
-        gemma_factory=lambda port, slots, violation: FakeGemma(),
+        qwen_factory=lambda talker, codec, speech, tts: qwen,
+        gemma_factory=lambda port, slots, profile, violation: FakeGemma(),
     )
     await lifecycle.start()
     assert lifecycle.phase is LifecyclePhase.FAILED
@@ -315,7 +356,7 @@ async def test_hash_failure_prevents_all_runtime_construction(
 ) -> None:
     monkeypatch.setattr(importlib.metadata, "version", lambda package: "6.2.1")
     settings = make_settings_and_lock(tmp_path)
-    gemma_file = settings.models.root / "google/gemma-4-31B-it" / "gemma.gguf"
+    gemma_file = settings.models.root / "google/gemma-4-31B-it" / "gemma-4-31B-it-Q4_0.gguf"
     gemma_file.write_bytes(b"tampered")
     constructors = 0
 
@@ -347,8 +388,8 @@ async def test_unexpected_llama_exit_immediately_revokes_readiness(
         cuda_probe=lambda: None,
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: FakeBlockingRuntime(),
-        qwen_factory=lambda talker, codec, speech: FakeBlockingRuntime(),
-        gemma_factory=lambda port, slots, violation: FakeGemma(),
+        qwen_factory=lambda talker, codec, speech, tts: FakeBlockingRuntime(),
+        gemma_factory=lambda port, slots, profile, violation: FakeGemma(),
     )
     await lifecycle.start()
     assert lifecycle.phase.value == LifecyclePhase.READY.value
@@ -416,8 +457,12 @@ async def test_talker_artifact_follows_the_configured_tts_mode(
         seen: list[Path] = []
 
         def qwen_factory(
-            talker: Path, codec: Path, speech: SpeechSettings, seen: list[Path] = seen
+            talker: Path,
+            codec: Path | None,
+            speech: SpeechSettings,
+            tts: object,
         ) -> FakeBlockingRuntime:
+            del codec, speech, tts
             seen.append(talker)
             return FakeBlockingRuntime()
 
@@ -427,7 +472,7 @@ async def test_talker_artifact_follows_the_configured_tts_mode(
             llama_factory=lambda binary, model, config: FakeLlama(),
             parakeet_factory=lambda checkpoint: FakeBlockingRuntime(),
             qwen_factory=qwen_factory,
-            gemma_factory=lambda port, slots, violation: FakeGemma(),
+            gemma_factory=lambda port, slots, profile, violation: FakeGemma(),
             gpu_memory_probe=lambda: 0,
         )
         await lifecycle.start()

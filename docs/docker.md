@@ -169,14 +169,29 @@ The slot count must be at least the session count. `llama_context_size` is total
 context across all slots, not context per session. Validate higher values against
 real VRAM and latency before production use.
 
-Record real GPU memory through warmup and two sessions:
+Record real GPU memory through warmup and the selected multi-session load:
 
 ```bash
 mkdir -p benchmarks/reports
 nvidia-smi --query-gpu=timestamp,index,name,memory.used,memory.total,utilization.gpu \
-  --format=csv -l 1 > benchmarks/reports/nvidia-smi-two-session.csv
+  --format=csv -l 1 > benchmarks/reports/nvidia-smi-multisession.csv
 ```
 
-In another terminal, start the service and the two-session soak. Preserve the
+In another terminal, start the service and the multi-session soak. Preserve the
 service Prometheus snapshot with the report. Only measured results belong in
 `docs/performance.md`.
+
+Compose exposes only closed profile fields rather than arbitrary server
+arguments: `HUGGING_VOICE_PROFILE_ID`, `HUGGING_VOICE_LLM_PROFILE`,
+`HUGGING_VOICE_TTS_PROFILE`, `HUGGING_VOICE_TTS_WORKER_COUNT`, and
+`HUGGING_VOICE_TTS_CHUNK_SIZE`. A four-session candidate must set these together
+with the matching lock, four slots, and bounded total context. Any profile/lock
+mismatch keeps readiness red.
+
+The image also contains the three coherent startup configurations under
+`/etc/hugging-voice/profiles/` (`compat.yaml`, `multisession-gemma-a4b.yaml`, and
+`multisession-qwen-a3b.yaml`) for deployments that select `--config` directly.
+The public profile ID identifies the fixed model pairing; `/v1/models` additionally
+reports capacity, slots, context, VAD, TTS chunk size, and worker count. The soak
+driver hashes that complete report as `configuration_fingerprint`, so measurements
+with different tuning cannot be treated as identical evidence.

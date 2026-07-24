@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+from .llm_profiles import LLMProfileId
 
 
 class StrictConfig(BaseModel):
@@ -30,6 +32,7 @@ class ModelSettings(StrictConfig):
     root: Path = Path("/models")
     lock_file: Path = Path("/models/manifest.lock.json")
     llama_server_binary: Path = Path("/usr/local/bin/llama-server")
+    llm_profile: LLMProfileId = "compat_gemma31"
     llama_cpp_commit: Literal["3ce7da2c852c538c4c5f9806da27029cf8c9cc4a"] = (
         "3ce7da2c852c538c4c5f9806da27029cf8c9cc4a"
     )
@@ -37,8 +40,23 @@ class ModelSettings(StrictConfig):
     # llama.cpp divides this total context across all parallel sequence slots.
     llama_context_size: int = Field(default=32_768, ge=2_048, le=1_048_576)
     llama_parallel_slots: int = Field(default=2, ge=1, le=64)
+    # These are a narrow allowlist confirmed against llama_cpp_commit.
+    llama_flash_attention: Literal["auto", "on"] = "auto"
+    llama_continuous_batching: Literal[True] = True
+    llama_batch_size: int = Field(default=2_048, ge=32, le=4_096)
+    llama_ubatch_size: int = Field(default=512, ge=32, le=2_048)
+    llama_cache_type_k: Literal["f16", "q8_0"] = "f16"
+    llama_cache_type_v: Literal["f16", "q8_0"] = "f16"
+    llama_cache_reuse: int = Field(default=0, ge=0, le=2_048)
+    llama_metrics: Literal[True] = True
     llama_startup_timeout_seconds: float = Field(default=600.0, ge=10.0, le=1_800.0)
     llama_shutdown_timeout_seconds: float = Field(default=15.0, ge=1.0, le=120.0)
+
+    @model_validator(mode="after")
+    def validate_batch_sizes(self) -> ModelSettings:
+        if self.llama_ubatch_size > self.llama_batch_size:
+            raise ValueError("models.llama_ubatch_size cannot exceed models.llama_batch_size")
+        return self
 
 
 class AudioSettings(StrictConfig):
@@ -57,7 +75,7 @@ class VADSettings(StrictConfig):
     threshold: float = Field(default=0.6, ge=0.1, le=0.95)
     min_speech_ms: int = Field(default=384, ge=96, le=2_000)
     min_speech_continuation_ms: int = Field(default=192, ge=0, le=1_000)
-    min_silence_ms: int = Field(default=500, ge=100, le=3_000)
+    min_silence_ms: int = Field(default=500, ge=250, le=3_000)
     speech_pad_ms: int = Field(default=30, ge=0, le=500)
     short_segment_merge_ms: Literal[0] = 0
     interrupt_response: bool = True
@@ -187,6 +205,81 @@ class VoiceGenerationSettings(StrictConfig):
     repetition_penalty: float = Field(default=1.05, ge=1.0, le=2.0)
 
 
+class TranscriptionSettings(StrictConfig):
+    """Bounded optional partial-STT policy.
+
+    Final transcription is always enabled for the speech pipeline. Partials are
+    an operator opt-in because they contend with final STT on the shared runtime.
+    """
+
+    partial_enabled: bool = False
+    partial_interval_ms: int = Field(default=1_000, ge=250, le=5_000)
+    partial_max_audio_ms: int = Field(default=4_000, ge=1_000, le=15_000)
+
+
+TTSProfile = Literal["compat_qwen3_tts_1_7b_ggml", "qwen3_tts_0_6b_cuda"]
+ServiceProfileId = Literal[
+    "compat_gemma31_qwen17_ggml",
+    "multisession_gemma_a4b_qwen06_cuda",
+    "multisession_qwen_a3b_qwen06_cuda",
+]
+
+
+class TTSSettings(StrictConfig):
+    """One concrete TTS runtime profile and its bounded scheduler pool."""
+
+    profile: TTSProfile = "compat_qwen3_tts_1_7b_ggml"
+    chunk_size: Literal[2, 4, 6, 8, 12] = 12
+    worker_count: int = Field(default=1, ge=1, le=4)
+    deployment_mode: Literal["production", "benchmark"] = "production"
+
+    @field_validator("chunk_size", mode="before")
+    @classmethod
+    def parse_environment_chunk_size(cls, value: object) -> object:
+        """Accept the decimal strings supplied by environment variables."""
+
+        if isinstance(value, str) and value in {"2", "4", "6", "8", "12"}:
+            return int(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_profile_workers(self) -> TTSSettings:
+        if self.profile != "qwen3_tts_0_6b_cuda" and self.worker_count != 1:
+            raise ValueError("more than one TTS worker requires qwen3_tts_0_6b_cuda")
+        if self.deployment_mode == "production" and self.worker_count > 2:
+            raise ValueError("production TTS worker_count must be 1 or 2")
+        return self
+
+
+class SegmentationSettings(StrictConfig):
+    """Visible-text boundaries used to feed the shared TTS runtime."""
+
+    first_segment_max_characters: int = Field(default=72, ge=32, le=160)
+    next_segment_max_characters: int = Field(default=140, ge=64, le=200)
+    hard_max_characters: int = Field(default=160, ge=80, le=220)
+
+    @model_validator(mode="after")
+    def validate_boundaries(self) -> SegmentationSettings:
+        if self.first_segment_max_characters > self.next_segment_max_characters:
+            raise ValueError(
+                "segmentation.first_segment_max_characters cannot exceed "
+                "segmentation.next_segment_max_characters"
+            )
+        if self.next_segment_max_characters > self.hard_max_characters:
+            raise ValueError(
+                "segmentation.next_segment_max_characters cannot exceed "
+                "segmentation.hard_max_characters"
+            )
+        return self
+
+
+class LLMGenerationSettings(StrictConfig):
+    """Bounded visible generation limits for conversational turns."""
+
+    tool_decision_max_tokens: int = Field(default=96, ge=16, le=256)
+    voice_reply_max_tokens: int = Field(default=128, ge=32, le=512)
+
+
 class SpeechSettings(StrictConfig):
     default_language: str = Field(default="de", pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
     default_voice: str = Field(default="warm_female", pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
@@ -207,6 +300,8 @@ class SpeechSettings(StrictConfig):
         max_length=4_000,
     )
     generation: VoiceGenerationSettings = Field(default_factory=VoiceGenerationSettings)
+    segmentation: SegmentationSettings = Field(default_factory=SegmentationSettings)
+    llm: LLMGenerationSettings = Field(default_factory=LLMGenerationSettings)
     languages: dict[str, LanguageSettings] = Field(
         default_factory=lambda: {
             "de": LanguageSettings(
@@ -344,16 +439,40 @@ class ServiceSettings(BaseSettings):
         case_sensitive=False,
     )
 
+    profile_id: ServiceProfileId = "compat_gemma31_qwen17_ggml"
     server: ServerSettings = Field(default_factory=ServerSettings)
     models: ModelSettings = Field(default_factory=ModelSettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)
     vad: VADSettings = Field(default_factory=VADSettings)
+    transcription: TranscriptionSettings = Field(default_factory=TranscriptionSettings)
+    tts: TTSSettings = Field(default_factory=TTSSettings)
     speech: SpeechSettings = Field(default_factory=SpeechSettings)
 
     @model_validator(mode="after")
     def validate_capacity(self) -> ServiceSettings:
         if self.server.max_sessions > self.models.llama_parallel_slots:
             raise ValueError("server.max_sessions cannot exceed models.llama_parallel_slots")
+        if self.tts.worker_count > self.server.max_sessions:
+            raise ValueError("tts.worker_count cannot exceed server.max_sessions")
+        if self.tts.profile == "qwen3_tts_0_6b_cuda" and self.speech.tts_mode != "voice_clone":
+            raise ValueError("qwen3_tts_0_6b_cuda supports only speech.tts_mode=voice_clone")
+        expected_models: dict[ServiceProfileId, tuple[LLMProfileId, TTSProfile]] = {
+            "compat_gemma31_qwen17_ggml": (
+                "compat_gemma31",
+                "compat_qwen3_tts_1_7b_ggml",
+            ),
+            "multisession_gemma_a4b_qwen06_cuda": (
+                "gemma4_26b_a4b",
+                "qwen3_tts_0_6b_cuda",
+            ),
+            "multisession_qwen_a3b_qwen06_cuda": (
+                "qwen3_30b_a3b_2507",
+                "qwen3_tts_0_6b_cuda",
+            ),
+        }
+        expected_llm, expected_tts = expected_models[self.profile_id]
+        if (self.models.llm_profile, self.tts.profile) != (expected_llm, expected_tts):
+            raise ValueError("profile_id does not match the selected LLM and TTS profiles")
         minimum_context = self.models.llama_parallel_slots * 2_048
         if self.models.llama_context_size < minimum_context:
             raise ValueError(

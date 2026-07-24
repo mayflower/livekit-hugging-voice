@@ -8,7 +8,7 @@ from typing import Literal, TypeAlias
 
 from hugging_voice_protocol.events import canonical_json
 
-from .runtimes.gemma import GemmaMessage, GemmaToolCall
+from .runtimes.llama_cpp_chat import GemmaMessage, GemmaToolCall
 
 ConversationRole = Literal["user", "assistant"]
 

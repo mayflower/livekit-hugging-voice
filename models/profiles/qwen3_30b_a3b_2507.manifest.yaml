@@ -1,0 +1,10 @@
+schema_version: 1
+profile_id: qwen3_30b_a3b_2507
+models:
+  - delivery: huggingface
+    id: Qwen/Qwen3-30B-A3B-Instruct-2507
+    source_repo: bartowski/Qwen_Qwen3-30B-A3B-Instruct-2507-GGUF
+    revision: 6c6e8692f43e4ca663f7ece8229a1361090d3a4c
+    license: Apache-2.0
+    files:
+      - path: Qwen_Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf

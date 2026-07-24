@@ -11,16 +11,31 @@ import pytest
 from aiohttp import web
 from hugging_voice_protocol.audio import OUTPUT_FRAME_BYTES
 from hugging_voice_protocol.events import FunctionDefinition, FunctionTool
-from hugging_voice_service.runtimes.gemma import (
+from hugging_voice_service.llm_profiles import LLM_PROFILES
+from hugging_voice_service.runtimes.llama_cpp_chat import (
+    BASE_PROMPT,
     GemmaMessage,
-    GemmaRuntime,
+    LlamaCppChatRuntime,
     TextDelta,
     TextUsage,
     ToolCall,
 )
 from hugging_voice_service.runtimes.parakeet import ParakeetRuntime
-from hugging_voice_service.runtimes.qwen_tts import QwenTTSRuntime
+from hugging_voice_service.runtimes.qwen_tts import QwenCudaGraphTTSRuntime, QwenTTSRuntime
 from hugging_voice_service.runtimes.silero import SessionVAD
+
+
+def test_llm_profiles_are_closed_and_qwen_2507_is_explicitly_non_thinking() -> None:
+    assert set(LLM_PROFILES) == {
+        "compat_gemma31",
+        "gemma4_26b_a4b",
+        "qwen3_30b_a3b_2507",
+    }
+    qwen = LLM_PROFILES["qwen3_30b_a3b_2507"]
+    assert qwen.reasoning_mode == "off"
+    assert dict(qwen.chat_template_kwargs) == {}
+    assert "enable_thinking" not in qwen.chat_template_kwargs
+    assert all(profile.readiness_probe == "two_step_tool" for profile in LLM_PROFILES.values())
 
 
 class Probability:
@@ -43,6 +58,37 @@ class ScriptedVADModel:
 
     def reset_states(self) -> None:
         self.reset_count += 1
+
+
+class FakeCudaGraphQwenModel:
+    def __init__(self) -> None:
+        self.warmups: list[int] = []
+        self.prepared: list[tuple[str, str]] = []
+        self.prompts_used: list[object] = []
+        self.closed_streams = 0
+        self.non_finite = False
+
+    def warmup(self, *, prefill_len: int = 100) -> None:
+        self.warmups.append(prefill_len)
+
+    def create_voice_clone_prompt(self, *, ref_audio: str, ref_text: str) -> object:
+        self.prepared.append((ref_audio, ref_text))
+        return {"reference": ref_audio, "text": ref_text}
+
+    def generate_voice_clone_streaming(
+        self, **kwargs: Any
+    ) -> Iterator[tuple[np.ndarray, int, dict[str, Any]]]:
+        self.prompts_used.append(kwargs["voice_clone_prompt"])
+
+        def generate() -> Iterator[tuple[np.ndarray, int, dict[str, Any]]]:
+            try:
+                value = np.nan if self.non_finite else 0.1
+                yield np.full(480, value, dtype=np.float32), 24_000, {}
+                yield np.full(480, 0.2, dtype=np.float32), 24_000, {}
+            finally:
+                self.closed_streams += 1
+
+        return generate()
 
 
 def test_session_vad_has_isolated_state_remainder_and_deterministic_boundaries() -> None:
@@ -266,6 +312,101 @@ def test_qwen_voice_clone_requires_the_frozen_references(tmp_path: Path) -> None
         )
 
 
+def _cuda_model_dir(tmp_path: Path) -> Path:
+    model_dir = tmp_path / "qwen-cuda"
+    (model_dir / "speech_tokenizer").mkdir(parents=True)
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+    (model_dir / "model.safetensors").write_bytes(b"model")
+    (model_dir / "speech_tokenizer" / "model.safetensors").write_bytes(b"codec")
+    return model_dir
+
+
+@pytest.mark.asyncio
+async def test_qwen_cuda_graph_prepares_all_references_and_reuses_prompts(
+    tmp_path: Path,
+) -> None:
+    model = FakeCudaGraphQwenModel()
+    first = tmp_path / "first.wav"
+    second = tmp_path / "second.wav"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    runtime = QwenCudaGraphTTSRuntime(
+        _cuda_model_dir(tmp_path),
+        model_factory=lambda path: model,
+        cuda_probe=lambda: None,
+        voice_references=(
+            ("German", first, "Erste Referenz."),
+            ("Italian", second, "Secondo riferimento."),
+        ),
+        chunk_size=4,
+    )
+    runtime.load()
+    runtime.warmup()
+    frames = [
+        frame
+        async for frame in runtime.stream_pcm16_frames(
+            "Hallo.",
+            language="German",
+            instructions="ignored",
+            ref_audio=first,
+            ref_text="Erste Referenz.",
+        )
+    ]
+
+    assert runtime.load_count == 1
+    assert model.warmups == [100]
+    assert model.prepared == [
+        (str(first), "Erste Referenz."),
+        (str(second), "Secondo riferimento."),
+    ]
+    assert model.prompts_used[-1] == {"reference": str(first), "text": "Erste Referenz."}
+    assert frames and all(len(frame) == 960 for frame in frames)
+    runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_qwen_cuda_graph_closes_generator_on_cancellation_and_rejects_nonfinite(
+    tmp_path: Path,
+) -> None:
+    model = FakeCudaGraphQwenModel()
+    reference = tmp_path / "voice.wav"
+    reference.write_bytes(b"voice")
+    runtime = QwenCudaGraphTTSRuntime(
+        _cuda_model_dir(tmp_path),
+        model_factory=lambda path: model,
+        cuda_probe=lambda: None,
+        voice_references=(("French", reference, "Une référence."),),
+    )
+    runtime.load()
+    runtime.warmup()
+    cancelled = False
+    stream = runtime.stream_pcm16_frames(
+        "Bonjour.",
+        language="French",
+        instructions="",
+        ref_audio=reference,
+        ref_text="Une référence.",
+        cancelled=lambda: cancelled,
+    )
+    assert len(await anext(stream)) == 960
+    cancelled = True
+    with pytest.raises(StopAsyncIteration):
+        await anext(stream)
+    assert model.closed_streams >= 2  # startup streaming probe plus cancelled job
+
+    model.non_finite = True
+    with pytest.raises(RuntimeError, match="non-finite"):
+        async for _ in runtime.stream_pcm16_frames(
+            "Encore.",
+            language="French",
+            instructions="",
+            ref_audio=reference,
+            ref_text="Une référence.",
+        ):
+            pass
+    runtime.close()
+
+
 @pytest.mark.asyncio
 async def test_gemma_suppresses_reasoning_and_disables_thinking_in_request() -> None:
     received: list[dict[str, Any]] = []
@@ -296,7 +437,7 @@ async def test_gemma_suppresses_reasoning_and_disables_thinking_in_request() -> 
     await site.start()
     sockets = site._server.sockets  # type: ignore[union-attr]
     port = sockets[0].getsockname()[1]
-    runtime = GemmaRuntime(port=port)
+    runtime = LlamaCppChatRuntime(port=port)
     try:
         events = [
             event
@@ -319,6 +460,56 @@ async def test_gemma_suppresses_reasoning_and_disables_thinking_in_request() -> 
 
 
 @pytest.mark.asyncio
+async def test_gemma_prefix_prefill_uses_zero_tokens_fixed_slot_and_cache() -> None:
+    received: list[dict[str, Any]] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        received.append(await request.json())
+        return web.json_response(
+            {
+                "choices": [],
+                "usage": {"prompt_tokens": 23, "completion_tokens": 0, "total_tokens": 23},
+            }
+        )
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    sockets = site._server.sockets  # type: ignore[union-attr]
+    runtime = LlamaCppChatRuntime(port=sockets[0].getsockname()[1], parallel_slots=4)
+    try:
+        tokens = await runtime.prefill(
+            instructions="Keep it short.",
+            language_instruction="Respond in Italian.",
+            slot_id=3,
+        )
+    finally:
+        await runtime.aclose()
+        await runner.cleanup()
+
+    assert tokens == 23
+    assert received == [
+        {
+            "model": "gemma-4-31b",
+            "messages": [
+                {"role": "system", "content": BASE_PROMPT},
+                {"role": "system", "content": "Respond in Italian."},
+                {"role": "system", "content": "Keep it short."},
+            ],
+            "stream": False,
+            "max_tokens": 0,
+            "temperature": 0,
+            "cache_prompt": True,
+            "id_slot": 3,
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_gemma_strips_fragmented_leading_thinking_block() -> None:
     async def handler(request: web.Request) -> web.StreamResponse:
         await request.read()
@@ -337,7 +528,7 @@ async def test_gemma_strips_fragmented_leading_thinking_block() -> None:
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     sockets = site._server.sockets  # type: ignore[union-attr]
-    runtime = GemmaRuntime(port=sockets[0].getsockname()[1])
+    runtime = LlamaCppChatRuntime(port=sockets[0].getsockname()[1])
     try:
         events = [
             event
@@ -383,7 +574,7 @@ async def test_gemma_allows_exactly_two_parallel_isolated_streams() -> None:
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     sockets = site._server.sockets  # type: ignore[union-attr]
-    runtime = GemmaRuntime(port=sockets[0].getsockname()[1])
+    runtime = LlamaCppChatRuntime(port=sockets[0].getsockname()[1])
 
     async def consume(canary: str) -> str:
         chunks = [
@@ -434,7 +625,7 @@ async def test_gemma_aggregates_one_structured_tool_call_with_slot_cache() -> No
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
     sockets = site._server.sockets  # type: ignore[union-attr]
-    runtime = GemmaRuntime(port=sockets[0].getsockname()[1], parallel_slots=4)
+    runtime = LlamaCppChatRuntime(port=sockets[0].getsockname()[1], parallel_slots=4)
     tool = FunctionTool(
         function=FunctionDefinition(
             name="add_numbers",
@@ -459,7 +650,7 @@ async def test_gemma_aggregates_one_structured_tool_call_with_slot_cache() -> No
         assert requests[0]["id_slot"] == 3
         assert requests[0]["cache_prompt"] is True
         assert requests[0]["parallel_tool_calls"] is False
-        assert requests[0]["temperature"] == 0.2
+        assert requests[0]["temperature"] == 0.0
         assert requests[0]["max_tokens"] == 128
     finally:
         await runtime.aclose()

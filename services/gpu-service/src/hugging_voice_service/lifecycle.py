@@ -8,15 +8,22 @@ import wave
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
+
+import aiohttp
 
 from .auth import TokenAuthenticator
-from .config import ServiceSettings, SpeechSettings
-from .llama_process import LlamaProcess, LlamaProcessState
+from .config import ServiceSettings, SpeechSettings, TTSSettings
+from .llama_process import LlamaProcess, LlamaProcessError, LlamaProcessState
+from .llm_profiles import LLMProfile, resolve_llm_profile
 from .model_manifest import LockedModel, ModelLock, load_lock, verify_lock
-from .runtimes.gemma import GemmaRuntime
+from .runtimes.llama_cpp_chat import LlamaCppChatRuntime
 from .runtimes.parakeet import ParakeetRuntime
-from .runtimes.qwen_tts import QwenTTSRuntime
+from .runtimes.qwen_tts import (
+    QwenCudaGraphTTSRuntime,
+    QwenTTSRuntime,
+    QwenTTSRuntimePool,
+)
 from .telemetry import ServiceTelemetry
 
 logger = logging.getLogger(__name__)
@@ -89,7 +96,8 @@ class ManagedParakeet(Protocol):
 
 
 class ManagedQwen(Protocol):
-    load_count: int
+    @property
+    def load_count(self) -> int: ...
 
     def load(self) -> None: ...
 
@@ -106,8 +114,8 @@ class ManagedGemma(Protocol):
 
 LlamaFactory = Callable[[Path, Path, ServiceSettings], ManagedLlama]
 ParakeetFactory = Callable[[Path], ManagedParakeet]
-QwenFactory = Callable[[Path, Path, SpeechSettings], ManagedQwen]
-GemmaFactory = Callable[[int, int, Callable[[], None]], ManagedGemma]
+QwenFactory = Callable[[Path, Path | None, SpeechSettings, TTSSettings], ManagedQwen]
+GemmaFactory = Callable[[int, int, LLMProfile, Callable[[], None]], ManagedGemma]
 CudaProbe = Callable[[], None]
 GpuMemoryProbe = Callable[[], int]
 
@@ -129,12 +137,22 @@ def _gpu_memory_bytes() -> int:
 
 
 def _llama_factory(binary: Path, model: Path, settings: ServiceSettings) -> LlamaProcess:
+    profile = resolve_llm_profile(settings.models.llm_profile)
     return LlamaProcess(
         binary=binary,
         model=model,
+        profile=profile,
         port=settings.models.llama_port,
         parallel_slots=settings.models.llama_parallel_slots,
         context_size=settings.models.llama_context_size,
+        flash_attention=settings.models.llama_flash_attention,
+        continuous_batching=settings.models.llama_continuous_batching,
+        batch_size=settings.models.llama_batch_size,
+        ubatch_size=settings.models.llama_ubatch_size,
+        cache_type_k=settings.models.llama_cache_type_k,
+        cache_type_v=settings.models.llama_cache_type_v,
+        cache_reuse=settings.models.llama_cache_reuse,
+        metrics=settings.models.llama_metrics,
         startup_timeout=settings.models.llama_startup_timeout_seconds,
         shutdown_timeout=settings.models.llama_shutdown_timeout_seconds,
     )
@@ -143,42 +161,76 @@ def _llama_factory(binary: Path, model: Path, settings: ServiceSettings) -> Llam
 def _gemma_factory(
     port: int,
     parallel_slots: int,
+    profile: LLMProfile,
     violation: Callable[[], None],
-) -> GemmaRuntime:
-    return GemmaRuntime(
+) -> LlamaCppChatRuntime:
+    return LlamaCppChatRuntime(
         port=port,
+        profile=profile,
         parallel_slots=parallel_slots,
         reasoning_violation=violation,
     )
 
 
-def _qwen_factory(talker: Path, codec: Path, speech: SpeechSettings) -> QwenTTSRuntime:
+def _voice_references(speech: SpeechSettings) -> tuple[tuple[str, Path, str], ...]:
+    references: list[tuple[str, Path, str]] = []
+    for voice_id in speech.voices:
+        for language_id, language_settings in speech.languages.items():
+            reference = speech.resolve_voice_reference(voice_id, language_id)
+            references.append(
+                (
+                    language_settings.model_language,
+                    speech.voice_reference_path(reference),
+                    reference.text,
+                )
+            )
+    return tuple(references)
+
+
+def _qwen_factory(
+    primary: Path,
+    secondary: Path | None,
+    speech: SpeechSettings,
+    tts: TTSSettings,
+) -> QwenTTSRuntimePool:
     language = speech.resolve_language(speech.default_language)
     voice = speech.resolve_voice(speech.default_voice)
-    voice_references: list[tuple[str, Path, str]] = []
-    if speech.tts_mode == "voice_clone":
-        for voice_id in speech.voices:
-            for language_id, language_settings in speech.languages.items():
-                reference = speech.resolve_voice_reference(voice_id, language_id)
-                voice_references.append(
-                    (
-                        language_settings.model_language,
-                        speech.voice_reference_path(reference),
-                        reference.text,
-                    )
+    references = _voice_references(speech) if speech.tts_mode == "voice_clone" else ()
+    if tts.profile == "qwen3_tts_0_6b_cuda":
+        return QwenTTSRuntimePool(
+            [
+                QwenCudaGraphTTSRuntime(
+                    primary,
+                    voice_references=references,
+                    chunk_size=tts.chunk_size,
+                    do_sample=speech.generation.do_sample,
+                    temperature=speech.generation.temperature,
+                    top_k=speech.generation.top_k,
+                    top_p=speech.generation.top_p,
+                    repetition_penalty=speech.generation.repetition_penalty,
                 )
-    return QwenTTSRuntime(
-        talker,
-        codec,
-        mode=speech.tts_mode,
-        warmup_language=language.model_language,
-        warmup_instructions=voice.render(language.model_language),
-        voice_references=tuple(voice_references),
-        do_sample=speech.generation.do_sample,
-        temperature=speech.generation.temperature,
-        top_k=speech.generation.top_k,
-        top_p=speech.generation.top_p,
-        repetition_penalty=speech.generation.repetition_penalty,
+                for _ in range(tts.worker_count)
+            ]
+        )
+    if secondary is None:
+        raise RuntimeError("compatibility Qwen profile requires the shared codec")
+    return QwenTTSRuntimePool(
+        [
+            QwenTTSRuntime(
+                primary,
+                secondary,
+                mode=speech.tts_mode,
+                warmup_language=language.model_language,
+                warmup_instructions=voice.render(language.model_language),
+                voice_references=references,
+                do_sample=speech.generation.do_sample,
+                temperature=speech.generation.temperature,
+                top_k=speech.generation.top_k,
+                top_p=speech.generation.top_p,
+                repetition_penalty=speech.generation.repetition_penalty,
+                chunk_size=tts.chunk_size,
+            )
+        ]
     )
 
 
@@ -241,6 +293,12 @@ class ServiceLifecycle:
                 )
                 self.phase = LifecyclePhase.VERIFYING_MODELS
                 self.lock = await asyncio.to_thread(load_lock, self.settings.models.lock_file)
+                if self.lock.profile_id != self.settings.profile_id:
+                    raise RuntimeError(
+                        "model lock profile mismatch: "
+                        f"config={self.settings.profile_id!r} "
+                        f"lock={self.lock.profile_id!r}"
+                    )
                 await asyncio.to_thread(
                     verify_lock,
                     self.lock,
@@ -270,18 +328,22 @@ class ServiceLifecycle:
 
                 self.phase = LifecyclePhase.LOADING_QWEN
                 self.qwen = self._qwen_factory(
-                    artifacts["qwen_talker"],
-                    artifacts["qwen_codec"],
+                    artifacts["qwen_primary"],
+                    artifacts.get("qwen_secondary"),
                     self.settings.speech,
+                    self.settings.tts,
                 )
                 await asyncio.to_thread(self.qwen.load)
                 await asyncio.to_thread(self.qwen.warmup)
-                self.telemetry.model_loads.labels(model="qwen_tts").inc()
+                self.telemetry.model_loads.labels(model="qwen_tts").inc(
+                    self.settings.tts.worker_count
+                )
 
                 self.phase = LifecyclePhase.WARMING_GEMMA
                 self.gemma = self._gemma_factory(
                     self.settings.models.llama_port,
                     self.settings.models.llama_parallel_slots,
+                    resolve_llm_profile(self.settings.models.llm_profile),
                     self.telemetry.reasoning_violations.inc,
                 )
                 await self.gemma.warmup()
@@ -319,8 +381,17 @@ class ServiceLifecycle:
 
     def model_report(self) -> dict[str, object]:
         return {
+            "profile_id": self.settings.profile_id,
             "llama_cpp_commit": self.settings.models.llama_cpp_commit,
-            "quantization": "Q4_0",
+            "llm_profile": self.settings.models.llm_profile,
+            "quantization": resolve_llm_profile(self.settings.models.llm_profile).quantization,
+            "tts_profile": self.settings.tts.profile,
+            "tts_worker_count": self.settings.tts.worker_count,
+            "max_sessions": self.settings.server.max_sessions,
+            "llama_parallel_slots": self.settings.models.llama_parallel_slots,
+            "llama_context_size": self.settings.models.llama_context_size,
+            "vad_min_silence_ms": self.settings.vad.min_silence_ms,
+            "tts_chunk_size": self.settings.tts.chunk_size,
             "models": []
             if self.lock is None
             else [model.model_dump(mode="json") for model in self.lock.models],
@@ -338,9 +409,23 @@ class ServiceLifecycle:
         except (ImportError, RuntimeError, ValueError) as exc:
             if not self._gpu_memory_observation_failed:
                 logger.warning("gpu_memory_observation_unavailable", extra={"error": str(exc)})
-                self._gpu_memory_observation_failed = True
+            self._gpu_memory_observation_failed = True
             return
         self.telemetry.gpu_memory_bytes.set(observed)
+
+    async def llama_metrics(self) -> bytes:
+        """Best-effort raw metrics from the loopback-only child process."""
+
+        llama = self.llama
+        scrape = None if llama is None else getattr(llama, "metrics", None)
+        if scrape is None:
+            return b""
+        try:
+            return cast(bytes, await scrape())
+        except (aiohttp.ClientError, LlamaProcessError, TimeoutError) as exc:
+            self.telemetry.llama_metrics_scrape_failures.inc()
+            logger.warning("llama_metrics_scrape_failed", extra={"error": str(exc)})
+            return b""
 
     async def _monitor_llama(self) -> None:
         llama = self.llama
@@ -373,28 +458,45 @@ class ServiceLifecycle:
 
     def _required_artifacts(self, lock: ModelLock) -> dict[str, Path]:
         models = {model.id: model for model in lock.models}
+        tts_model_id = (
+            "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+            if self.settings.tts.profile == "qwen3_tts_0_6b_cuda"
+            else "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+        )
+        llm_profile = resolve_llm_profile(self.settings.models.llm_profile)
         required = {
-            "google/gemma-4-31B-it",
+            llm_profile.model_id,
             "nvidia/parakeet-tdt-0.6b-v3",
-            "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+            tts_model_id,
             "silero-vad",
         }
         missing = required - models.keys()
         if missing:
             raise RuntimeError(f"model lock is missing required entries: {sorted(missing)}")
-        talker_file = QWEN_TALKER_FILES[self.settings.speech.tts_mode]
-        return {
-            "gemma": self._only_file(models["google/gemma-4-31B-it"]),
+        artifacts = {
+            "gemma": self._named_file(
+                models[llm_profile.model_id],
+                llm_profile.local_artifact_key,
+            ),
             "parakeet": self._only_file(models["nvidia/parakeet-tdt-0.6b-v3"]),
-            "qwen_talker": self._named_file(
-                models["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"],
-                talker_file,
-            ),
-            "qwen_codec": self._named_file(
-                models["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"],
-                "qwen-tokenizer-12hz-BF16.gguf",
-            ),
         }
+        if self.settings.tts.profile == "qwen3_tts_0_6b_cuda":
+            artifacts["qwen_primary"] = self.settings.models.root / tts_model_id
+            return artifacts
+        talker_file = QWEN_TALKER_FILES[self.settings.speech.tts_mode]
+        artifacts.update(
+            {
+                "qwen_primary": self._named_file(
+                    models[tts_model_id],
+                    talker_file,
+                ),
+                "qwen_secondary": self._named_file(
+                    models[tts_model_id],
+                    "qwen-tokenizer-12hz-BF16.gguf",
+                ),
+            }
+        )
+        return artifacts
 
     def _only_file(self, model: LockedModel) -> Path:
         if len(model.files) != 1:

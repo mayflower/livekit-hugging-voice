@@ -17,7 +17,7 @@ from hugging_voice_service.lifecycle import LifecyclePhase, ServiceLifecycle
 from hugging_voice_service.llama_process import LlamaProcessState
 from hugging_voice_service.model_manifest import LockedFile, LockedModel, ModelLock
 from hugging_voice_service.realtime import RealtimeService
-from hugging_voice_service.runtimes.gemma import GemmaMessage, TextDelta, TextUsage
+from hugging_voice_service.runtimes.llama_cpp_chat import GemmaMessage, TextDelta, TextUsage
 from hugging_voice_service.runtimes.silero import SessionVAD
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -109,8 +109,9 @@ class TestGemma:
         tools: object = (),
         tool_choice: object = "auto",
         slot_id: int = 0,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[TextDelta | TextUsage]:
-        del instructions, tools, tool_choice, slot_id
+        del instructions, tools, tool_choice, slot_id, max_tokens
         self.calls.append((language_instruction, system_prompt))
         assert messages[-1].content == "Hallo"
         yield TextDelta("Guten Tag. ")
@@ -134,8 +135,17 @@ class CanaryGemma(TestGemma):
         tools: object = (),
         tool_choice: object = "auto",
         slot_id: int = 0,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[TextDelta | TextUsage]:
-        del instructions, language_instruction, system_prompt, tools, tool_choice, slot_id
+        del (
+            instructions,
+            language_instruction,
+            system_prompt,
+            tools,
+            tool_choice,
+            slot_id,
+            max_tokens,
+        )
         canary = messages[-1].content
         assert canary is not None
         if "ALPHA" in canary:
@@ -202,12 +212,13 @@ def make_ready_service(tmp_path: Path, *, gemma: TestGemma | None = None) -> Rea
     lifecycle = ServiceLifecycle(settings)
     lifecycle.authenticator = TokenAuthenticator.from_file(token_file)
     lifecycle.lock = ModelLock(
+        profile_id="compat_gemma31_qwen17_ggml",
         models=(
             locked_model("google/gemma-4-31B-it"),
             locked_model("nvidia/parakeet-tdt-0.6b-v3"),
             locked_model("Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"),
             locked_model("silero-vad", package=True),
-        )
+        ),
     )
     lifecycle.llama = ReadyLlama()
     lifecycle.parakeet = TestParakeet()

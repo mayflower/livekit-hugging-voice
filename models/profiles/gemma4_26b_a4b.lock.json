@@ -1,0 +1,20 @@
+{
+  "profile_id": "gemma4_26b_a4b",
+  "models": [
+    {
+      "delivery": "huggingface",
+      "files": [
+        {
+          "path": "gemma-4-26B-A4B-it-Q4_0.gguf",
+          "sha256": "d208665ab1cd3a69f7a9a4bc59430e8448c8093d9b06334f566ac59d6d504a03",
+          "size": 14618145824
+        }
+      ],
+      "id": "google/gemma-4-26B-A4B-it",
+      "license": "Apache-2.0",
+      "revision": "3d3dca2094ff8112005fd10fc7a8e30cf4f45b56",
+      "source_repo": "ggml-org/gemma-4-26B-A4B-it-GGUF"
+    }
+  ],
+  "schema_version": 1
+}

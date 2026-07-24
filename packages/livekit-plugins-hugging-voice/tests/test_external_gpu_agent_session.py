@@ -245,12 +245,19 @@ async def test_external_agent_session_native_tool_turn_is_silent_until_result() 
             async with client.get(metrics_url) as response:
                 metrics = await response.text()
                 assert response.status == 200
-        for runtime in ("gemma", "parakeet", "qwen_tts"):
+        for runtime in ("gemma", "parakeet"):
             assert re.search(
                 rf'^hugging_voice_model_loads_total\{{model="{runtime}"\}} 1(?:\.0)?$',
                 metrics,
                 re.MULTILINE,
             )
+        tts_workers = int(os.environ.get("HV_EXPECTED_TTS_WORKERS", "1"))
+        assert re.search(
+            rf'^hugging_voice_model_loads_total\{{model="qwen_tts"\}} '
+            rf"{tts_workers}(?:\.0)?$",
+            metrics,
+            re.MULTILINE,
+        )
     finally:
         await session.aclose()
         await model.aclose()

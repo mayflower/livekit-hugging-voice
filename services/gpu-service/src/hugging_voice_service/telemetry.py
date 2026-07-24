@@ -120,9 +120,49 @@ class ServiceTelemetry:
             "Speech stop to final transcription",
             registry=self.registry,
         )
+        self.partial_jobs_submitted = Counter(
+            "hugging_voice_partial_jobs_submitted_total",
+            "Optional partial STT jobs submitted to the shared scheduler",
+            registry=self.registry,
+        )
+        self.partial_jobs_dropped = Counter(
+            "hugging_voice_partial_jobs_dropped_total",
+            "Optional partial STT jobs dropped or superseded by the shared scheduler",
+            registry=self.registry,
+        )
+        self.partial_audio_seconds = Counter(
+            "hugging_voice_partial_audio_seconds_total",
+            "Audio seconds processed by optional partial STT jobs",
+            registry=self.registry,
+        )
+        self.final_audio_seconds = Counter(
+            "hugging_voice_final_audio_seconds_total",
+            "Audio seconds processed by mandatory final STT jobs",
+            registry=self.registry,
+        )
         self.llm_ttft_seconds = Histogram(
             "hugging_voice_llm_ttft_seconds",
             "LLM request to first visible text",
+            registry=self.registry,
+        )
+        self.llm_prefix_prefill_seconds = Histogram(
+            "hugging_voice_llm_prefix_prefill_seconds",
+            "Background prefix prefill duration for one fixed session slot",
+            registry=self.registry,
+        )
+        self.llm_prefix_prefill_tokens = Histogram(
+            "hugging_voice_llm_prefix_prefill_tokens",
+            "Prompt tokens reported by a successful session prefix prefill",
+            registry=self.registry,
+        )
+        self.llm_prefix_prefill_failures = Counter(
+            "hugging_voice_llm_prefix_prefill_failures_total",
+            "Failed session prefix prefill requests",
+            registry=self.registry,
+        )
+        self.llm_first_turn_wait_for_prefill_seconds = Histogram(
+            "hugging_voice_llm_first_turn_wait_for_prefill_seconds",
+            "First response generation wait for its existing prefix prefill future",
             registry=self.registry,
         )
         self.llm_duration_seconds = Histogram(
@@ -185,9 +225,52 @@ class ServiceTelemetry:
             "Currently executing shared TTS jobs",
             registry=self.registry,
         )
+        self.tts_worker_busy = Gauge(
+            "hugging_voice_tts_worker_busy",
+            "Whether one bounded TTS worker is executing a segment",
+            ("worker",),
+            registry=self.registry,
+        )
+        self.tts_worker_jobs_total = Counter(
+            "hugging_voice_tts_worker_jobs_total",
+            "TTS jobs assigned to each bounded worker",
+            ("worker",),
+            registry=self.registry,
+        )
+        self.tts_job_worker = Counter(
+            "hugging_voice_tts_job_worker_total",
+            "Worker assignment count for TTS jobs",
+            ("worker",),
+            registry=self.registry,
+        )
+        self.tts_sessions_waiting = Gauge(
+            "hugging_voice_tts_sessions_waiting",
+            "Sessions with queued TTS jobs and no active segment",
+            registry=self.registry,
+        )
+        self.tts_queue_depth = Gauge(
+            "hugging_voice_tts_queue_depth",
+            "Queued TTS jobs across all sessions",
+            registry=self.registry,
+        )
+        self.tts_active_sessions = Gauge(
+            "hugging_voice_tts_active_sessions",
+            "Sessions currently executing one TTS segment",
+            registry=self.registry,
+        )
+        self.tts_fairness_wait_seconds = Histogram(
+            "hugging_voice_tts_fairness_wait_seconds",
+            "Queue wait before a session receives a TTS worker",
+            registry=self.registry,
+        )
         self.llm_jobs_active = Gauge(
             "hugging_voice_llm_jobs_active",
             "Currently active Gemma streams",
+            registry=self.registry,
+        )
+        self.llama_metrics_scrape_failures = Counter(
+            "hugging_voice_llama_metrics_scrape_failures_total",
+            "Failed scrapes of the loopback-only llama.cpp metrics endpoint",
             registry=self.registry,
         )
         self.gpu_memory_bytes = Gauge(

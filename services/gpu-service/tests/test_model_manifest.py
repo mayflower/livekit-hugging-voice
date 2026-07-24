@@ -37,6 +37,7 @@ def write_manifest(path: Path, *, file_path: str = "weights.bin") -> None:
         "\n".join(
             [
                 "schema_version: 1",
+                "profile_id: test_profile",
                 "models:",
                 "  - delivery: huggingface",
                 "    id: logical/model",
@@ -62,6 +63,7 @@ def fake_download(**kwargs: object) -> str:
 
 def test_real_manifest_has_exact_revisions_and_expected_models() -> None:
     manifest = load_manifest(REPO_ROOT / "models" / "manifest.yaml")
+    assert manifest.profile_id == "compat_gemma31_qwen17_ggml"
     assert {model.id for model in manifest.models} == {
         "google/gemma-4-31B-it",
         "nvidia/parakeet-tdt-0.6b-v3",
@@ -78,6 +80,116 @@ def test_real_manifest_has_exact_revisions_and_expected_models() -> None:
         "qwen-talker-1.7b-base-BF16.gguf",
         "qwen-tokenizer-12hz-BF16.gguf",
     ]
+
+
+def test_cuda_tts_profile_has_an_exact_explicit_offline_lock() -> None:
+    profile_dir = REPO_ROOT / "models" / "profiles"
+    manifest = load_manifest(profile_dir / "qwen3_tts_0_6b_cuda.manifest.yaml")
+    lock = load_lock(profile_dir / "qwen3_tts_0_6b_cuda.lock.json")
+    manifest_models = {model.id: model for model in manifest.models}
+    locked_models = {model.id: model for model in lock.models}
+    assert manifest.profile_id == lock.profile_id == "qwen3_tts_0_6b_cuda"
+    assert set(manifest_models) == set(locked_models)
+    tts = locked_models["Qwen/Qwen3-TTS-12Hz-0.6B-Base"]
+    assert tts.revision == "5d83992436eae1d760afd27aff78a71d676296fc"
+    assert tts.license == "Apache-2.0"
+    assert {file.path for file in tts.files} == {
+        "config.json",
+        "generation_config.json",
+        "merges.txt",
+        "model.safetensors",
+        "preprocessor_config.json",
+        "speech_tokenizer/config.json",
+        "speech_tokenizer/configuration.json",
+        "speech_tokenizer/model.safetensors",
+        "speech_tokenizer/preprocessor_config.json",
+        "tokenizer_config.json",
+        "vocab.json",
+    }
+    assert all(file.size > 0 and len(file.sha256) == 64 for file in tts.files)
+
+
+@pytest.mark.parametrize(
+    ("stem", "model_id", "revision", "filename"),
+    [
+        (
+            "gemma4_26b_a4b",
+            "google/gemma-4-26B-A4B-it",
+            "3d3dca2094ff8112005fd10fc7a8e30cf4f45b56",
+            "gemma-4-26B-A4B-it-Q4_0.gguf",
+        ),
+        (
+            "qwen3_30b_a3b_2507",
+            "Qwen/Qwen3-30B-A3B-Instruct-2507",
+            "6c6e8692f43e4ca663f7ece8229a1361090d3a4c",
+            "Qwen_Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+        ),
+    ],
+)
+def test_llm_candidate_artifacts_have_exact_matching_locks(
+    stem: str,
+    model_id: str,
+    revision: str,
+    filename: str,
+) -> None:
+    profile_dir = REPO_ROOT / "models" / "profiles"
+    manifest = load_manifest(profile_dir / f"{stem}.manifest.yaml")
+    lock = load_lock(profile_dir / f"{stem}.lock.json")
+    assert manifest.profile_id == lock.profile_id == stem
+    assert len(manifest.models) == len(lock.models) == 1
+    artifact = lock.models[0]
+    assert artifact.id == model_id
+    assert artifact.revision == revision
+    assert artifact.files[0].path == filename
+    assert artifact.files[0].size > 10_000_000_000
+    assert len(artifact.files[0].sha256) == 64
+
+
+@pytest.mark.parametrize(
+    ("stem", "llm_model"),
+    [
+        (
+            "compat_gemma31_qwen17_ggml",
+            "google/gemma-4-31B-it",
+        ),
+        (
+            "multisession_gemma_a4b_qwen06_cuda",
+            "google/gemma-4-26B-A4B-it",
+        ),
+        (
+            "multisession_qwen_a3b_qwen06_cuda",
+            "Qwen/Qwen3-30B-A3B-Instruct-2507",
+        ),
+    ],
+)
+def test_startup_profiles_have_complete_matching_delivery_locks(
+    stem: str,
+    llm_model: str,
+) -> None:
+    profile_dir = REPO_ROOT / "models" / "profiles"
+    manifest = load_manifest(profile_dir / f"{stem}.manifest.yaml")
+    lock = load_lock(profile_dir / f"{stem}.lock.json")
+    assert manifest.profile_id == lock.profile_id == stem
+    assert {model.id for model in manifest.models} == {model.id for model in lock.models}
+    expected_tts = (
+        "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+        if stem == "compat_gemma31_qwen17_ggml"
+        else "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    )
+    expected_packages = (
+        {"silero-vad"}
+        if stem == "compat_gemma31_qwen17_ggml"
+        else {"faster-qwen3-tts", "silero-vad"}
+    )
+    assert {model.id for model in lock.models} == {
+        llm_model,
+        "nvidia/parakeet-tdt-0.6b-v3",
+        expected_tts,
+        *expected_packages,
+    }
+    assert all(
+        file.size > 0 and len(file.sha256) == 64 for model in lock.models for file in model.files
+    )
 
 
 def test_prefetch_writes_atomic_lock_and_offline_verify_detects_changes(tmp_path: Path) -> None:
@@ -138,6 +250,7 @@ def test_lock_rejects_placeholder_hash_and_size(tmp_path: Path) -> None:
     lock_path = tmp_path / "lock.json"
     payload = {
         "schema_version": 1,
+        "profile_id": "test_profile",
         "models": [
             {
                 "delivery": "huggingface",
@@ -160,6 +273,7 @@ def test_package_lock_checks_installed_version(
     lock = ModelLock.model_validate(
         {
             "schema_version": 1,
+            "profile_id": "test_profile",
             "models": [
                 {
                     "delivery": "python-package",

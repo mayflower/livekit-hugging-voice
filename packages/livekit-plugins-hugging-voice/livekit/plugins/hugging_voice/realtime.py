@@ -8,7 +8,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterable, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
@@ -39,6 +39,7 @@ from hugging_voice_protocol.events import (
     ResponseOutputFunctionCallDoneEvent,
     ResponseOutputTextDeltaEvent,
     ResponseOutputTextDoneEvent,
+    ResponseSpeakEvent,
     ServerEvent,
     SessionConfig,
     SessionCreatedEvent,
@@ -149,6 +150,7 @@ class _Command:
         "audio_commit",
         "audio_clear",
         "response_create",
+        "response_speak",
         "response_cancel",
     ]
     event_id: str
@@ -176,6 +178,7 @@ class _ResponseState:
     user_initiated: bool
     message_channel: aio.Chan[MessageGeneration]
     function_channel: aio.Chan[FunctionCall]
+    direct_say: bool = False
     text: str = ""
     first_audio_at: float | None = None
     next_audio_sequence: int = 0
@@ -241,7 +244,7 @@ class RealtimeModel(LiveKitRealtimeModel):
                 mutable_instructions=True,
                 mutable_tools=False,
                 per_response_tool_choice=True,
-                supports_say=False,
+                supports_say=True,
             )
         )
         if headless_dns is not None:
@@ -332,9 +335,11 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         self._response: _ResponseState | None = None
         self._pending_generation: asyncio.Future[GenerationCreatedEvent] | None = None
         self._pending_event_id: str | None = None
+        self._pending_direct_say = False
         self._pending_timeout_task: asyncio.Task[None] | None = None
         self._ack_waiters: dict[str, asyncio.Future[None]] = {}
         self._ack_tasks: set[asyncio.Task[None]] = set()
+        self._say_tasks: set[asyncio.Task[None]] = set()
         self._configuration_lock = asyncio.Lock()
         self._configuration_idle = asyncio.Event()
         self._configuration_idle.set()
@@ -342,6 +347,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         self._tools_frozen = False
         self._wire_item_ids: dict[str, str] = {}
         self._invalidated_call_ids: set[str] = set()
+        self._non_model_replay_item_ids: set[str] = set()
         self._connected_at = 0.0
         self._main_task = asyncio.create_task(self._run())
         self._audio_task = asyncio.create_task(self._audio_loop())
@@ -472,6 +478,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         future = asyncio.get_running_loop().create_future()
         self._pending_generation = future
         self._pending_event_id = event_id
+        self._pending_direct_say = False
         self._pending_timeout_task = asyncio.create_task(
             self._expire_generation_request(future, event_id)
         )
@@ -484,6 +491,43 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
             self._pending_timeout_task = None
             future.cancel()
             raise
+        return future
+
+    def say(
+        self,
+        text: str | AsyncIterable[str],
+    ) -> asyncio.Future[GenerationCreatedEvent]:
+        if self._pending_generation is not None or self._response is not None:
+            raise RealtimeError("a response is already pending or active")
+        if self._ever_connected and not self._connected.is_set():
+            raise RealtimeError("cannot speak while disconnected")
+        event_id = _id("evt")
+        future = asyncio.get_running_loop().create_future()
+        self._pending_generation = future
+        self._pending_event_id = event_id
+        self._pending_direct_say = True
+        self._pending_timeout_task = asyncio.create_task(
+            self._expire_generation_request(future, event_id)
+        )
+        if isinstance(text, str):
+            try:
+                self._validate_say_text(text)
+                self._queue_sync(_Command("response_speak", event_id, text))
+            except Exception:
+                self._clear_failed_say(future)
+                raise
+            return future
+        task = asyncio.create_task(self._collect_and_queue_say(text, event_id, future))
+        self._say_tasks.add(task)
+        task.add_done_callback(self._say_tasks.discard)
+
+        def cancel_unfinished_collector(
+            completed: asyncio.Future[GenerationCreatedEvent],
+        ) -> None:
+            if (completed.cancelled() or completed.exception() is not None) and not task.done():
+                task.cancel()
+
+        future.add_done_callback(cancel_unfinished_collector)
         return future
 
     def commit_audio(self) -> None:
@@ -541,8 +585,11 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         await asyncio.gather(self._audio_task, self._main_task, return_exceptions=True)
         for task in tuple(self._ack_tasks):
             task.cancel()
-        await asyncio.gather(*self._ack_tasks, return_exceptions=True)
+        for task in tuple(self._say_tasks):
+            task.cancel()
+        await asyncio.gather(*self._ack_tasks, *self._say_tasks, return_exceptions=True)
         self._ack_tasks.clear()
+        self._say_tasks.clear()
         self._model._discard_session(self)
         self._closed.set()
 
@@ -809,11 +856,14 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         ):
             await self._handle_response_event(event)
         elif isinstance(event, ErrorEvent):
+            error = RealtimeError(event.error.message)
+            if event.error.event_id == self._pending_event_id:
+                self._fail_pending(error)
             if event.error.event_id is not None:
                 waiter = self._ack_waiters.pop(event.error.event_id, None)
                 if waiter is not None and not waiter.done():
-                    waiter.set_exception(RealtimeError(event.error.message))
-            self._emit_error(RealtimeError(event.error.message), recoverable=event.error.retryable)
+                    waiter.set_exception(error)
+            self._emit_error(error, recoverable=event.error.retryable)
 
     async def _handle_response_event(
         self,
@@ -1010,6 +1060,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
             user_initiated=user_initiated,
             message_channel=aio.Chan[MessageGeneration](1),
             function_channel=aio.Chan[FunctionCall](1),
+            direct_say=self._pending_direct_say,
         )
         self._response = response
         generation = GenerationCreatedEvent(
@@ -1021,6 +1072,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         pending = self._pending_generation
         self._pending_generation = None
         self._pending_event_id = None
+        self._pending_direct_say = False
         if self._pending_timeout_task is not None:
             self._pending_timeout_task.cancel()
             self._pending_timeout_task = None
@@ -1068,6 +1120,11 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                     content=response.text,
                     interrupted=False,
                 )
+                if response.direct_say and self._has_dangling_tool_call():
+                    # A filler that completed before its FunctionCallOutput is
+                    # visible to LiveKit but deliberately absent from the
+                    # service's atomic model context. Do not replay it later.
+                    self._non_model_replay_item_ids.add(response.message_id)
         if self._response is response:
             self._response = None
 
@@ -1262,6 +1319,13 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                 tools=tools,
                 tool_choice=cast(Any, tool_choice),
             )
+        if command.kind == "response_speak":
+            assert isinstance(command.payload, str)
+            return ResponseSpeakEvent(
+                event_id=command.event_id,
+                session_id=session_id,
+                text=command.payload,
+            )
         assert command.kind == "response_cancel"
         response_id, generation_id = cast(tuple[str, str], command.payload)
         return ResponseCancelEvent(
@@ -1270,6 +1334,68 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
             response_id=response_id,
             generation_id=generation_id,
         )
+
+    async def _collect_and_queue_say(
+        self,
+        chunks: AsyncIterable[str],
+        event_id: str,
+        future: asyncio.Future[GenerationCreatedEvent],
+    ) -> None:
+        parts: list[str] = []
+        size = 0
+        try:
+            async for chunk in chunks:
+                if not isinstance(chunk, str):
+                    raise RealtimeError("say() stream yielded a non-string value")
+                size += len(chunk)
+                if size > 500:
+                    raise RealtimeError("say() text exceeds the 500 character limit")
+                parts.append(chunk)
+            text = "".join(parts)
+            self._validate_say_text(text)
+            if (
+                self._pending_generation is not future
+                or self._pending_event_id != event_id
+                or future.done()
+            ):
+                return
+            self._queue_sync(_Command("response_speak", event_id, text))
+        except asyncio.CancelledError:
+            self._clear_failed_say(future)
+            raise
+        except Exception as exc:
+            self._clear_failed_say(future, exc)
+
+    @staticmethod
+    def _validate_say_text(text: str) -> None:
+        try:
+            ResponseSpeakEvent(
+                event_id="evt_validation",
+                session_id="session_validation",
+                text=text,
+            )
+        except ValueError as exc:
+            raise RealtimeError(f"invalid say() text: {exc}") from exc
+
+    def _clear_failed_say(
+        self,
+        future: asyncio.Future[GenerationCreatedEvent],
+        error: Exception | None = None,
+    ) -> None:
+        owns_pending_request = self._pending_generation is future
+        if owns_pending_request:
+            self._pending_generation = None
+            self._pending_event_id = None
+            self._pending_direct_say = False
+            if self._pending_timeout_task is not None:
+                self._pending_timeout_task.cancel()
+                self._pending_timeout_task = None
+        if future.done():
+            return
+        if error is None:
+            future.cancel()
+        else:
+            future.set_exception(error)
 
     def _session_update_event(
         self,
@@ -1330,8 +1456,19 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         )
 
     def _skip_invalidated_replay(self, item: object) -> bool:
-        return isinstance(item, FunctionCall | FunctionCallOutput) and (
-            item.call_id in self._invalidated_call_ids
+        return (isinstance(item, ChatMessage) and item.id in self._non_model_replay_item_ids) or (
+            isinstance(item, FunctionCall | FunctionCallOutput)
+            and item.call_id in self._invalidated_call_ids
+        )
+
+    def _has_dangling_tool_call(self) -> bool:
+        completed = {
+            item.call_id for item in self._chat_ctx.items if isinstance(item, FunctionCallOutput)
+        }
+        return any(
+            item.call_id not in completed
+            for item in self._chat_ctx.items
+            if isinstance(item, FunctionCall)
         )
 
     @staticmethod
@@ -1429,6 +1566,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         pending = self._pending_generation
         self._pending_generation = None
         self._pending_event_id = None
+        self._pending_direct_say = False
         if self._pending_timeout_task is not None:
             self._pending_timeout_task.cancel()
             self._pending_timeout_task = None
@@ -1473,6 +1611,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
             if self._pending_generation is future and self._pending_event_id == event_id:
                 self._pending_generation = None
                 self._pending_event_id = None
+                self._pending_direct_say = False
                 self._pending_timeout_task = None
                 if not future.done():
                     future.set_exception(RealtimeError("response.created timed out"))

@@ -1,4 +1,4 @@
-# Repository instructions — version 0.2
+# Repository instructions — version 0.3
 
 These instructions are normative for every change in this repository. Wave 0
 records the pinned upstream baseline once in `docs/upstream-baseline.md`; later
@@ -8,11 +8,18 @@ general upstream survey.
 ## Product boundary
 
 Build one focused local multilingual speech-to-speech path for German, English,
-French, and Italian:
+French, and Italian. Version 0.3 retains the compatibility baseline and adds a
+small set of measured startup-only performance profiles:
 
-`LiveKit RealtimeModel plugin -> authenticated WebSocket -> Silero VAD -> shared
-Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
-1.7B VoiceDesign`.
+`LiveKit RealtimeModel plugin -> authenticated WebSocket -> per-session Silero
+VAD -> shared Parakeet TDT 0.6B v3 -> one local llama.cpp chat model -> bounded
+shared Qwen3-TTS runtime pool`.
+
+The compatibility profile remains Gemma 4 31B IT with Qwen3-TTS 1.7B. Candidate
+multi-session profiles are limited to Gemma 4 26B A4B IT or
+Qwen3-30B-A3B-Instruct-2507 in llama.cpp with Qwen3-TTS 0.6B Base through the
+CUDA-graph runtime. Exactly one complete profile is selected and loaded at
+process startup. There is no hot swap or automatic fallback.
 
 - Service, plugin, tests, and utilities are Python-only.
 - The plugin must implement LiveKit Agents' `RealtimeModel` and
@@ -21,7 +28,7 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
 - The agent-to-service transport is an internal authenticated WebSocket. Do not
   add WebRTC, `aiortc`, ICE, STUN/TURN, browser capture, or a web UI to the GPU
   service.
-- Version 0.2 supports native function calling through LiveKit Agents. Gemma
+- Version 0.3 supports native function calling through LiveKit Agents. The selected LLM
   decides whether to call a function and produces its name and JSON arguments;
   LiveKit Agents is the only tool executor. Python FunctionTools, Toolsets, and
   MCPToolsets live in the LiveKit worker. The GPU service never executes tools,
@@ -36,9 +43,14 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
   form described below: frozen reference recordings shipped with the service.
 - There is no cloud LLM, cloud fallback, silent CPU fallback, model downgrade,
   runtime download, `torch.hub` access, or movable model/Git/image pin.
-- Gemma is `google/gemma-4-31B-it`, locally quantized for llama.cpp. Never replace
-  it with E4B. Parakeet is `nvidia/parakeet-tdt-0.6b-v3`; TTS is
-  `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`.
+- The compatibility LLM is `google/gemma-4-31B-it`, locally quantized for
+  llama.cpp. The only performance candidates are `google/gemma-4-26B-A4B-it`
+  and `Qwen/Qwen3-30B-A3B-Instruct-2507`. Parakeet remains
+  `nvidia/parakeet-tdt-0.6b-v3`. Compatibility TTS is
+  `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`; the only performance TTS candidate is
+  `Qwen/Qwen3-TTS-12Hz-0.6B-Base`. A candidate may become a production default
+  only with exact artifact pins, the real readiness tool probe, multilingual
+  voice checks, tool-evaluation gates, and real NVIDIA multi-session results.
 - Public languages are `de`, `en`, `fr`, and `it`. Public voices are five fixed,
   operator-defined profiles: `warm_female`, `clear_female`, `warm_male`,
   `clear_male`, and `friendly_neutral`. The default `voice_clone` TTS mode speaks
@@ -54,16 +66,24 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
 
 - A GPU pod has one Python service controlling one loopback-only `llama-server`
   child process.
-- A service lifecycle loads exactly one Parakeet runtime, one Gemma runtime (one
-  llama-server with a bounded operator-configured sequence-slot count), and one
-  Qwen runtime. Concurrent sessions must never be implemented as complete model
-  pipelines. Per-session stateful Silero VAD instances are allowed.
+- A service lifecycle loads exactly one Parakeet runtime, one selected LLM runtime
+  (one llama-server with a bounded operator-configured sequence-slot count), and
+  a bounded pool of one or two selected Qwen runtimes. Three or four TTS workers
+  are benchmark-only in version 0.3. Concurrent sessions must never be implemented
+  as complete model pipelines. Per-session stateful Silero VAD instances are
+  allowed.
 - Connected-session admission, llama.cpp sequence slots, and total llama.cpp
   context are bounded operator configuration with compatibility defaults of two
   sessions, two slots, and 32768 tokens. These defaults are not a measured
   throughput or stability recommendation. `max_sessions` must not exceed the
   sequence-slot count, and the total context must provide at least 2048 tokens per
   slot.
+- At least two concurrent sessions remain a supported compatibility target.
+  Four sessions are the multi-session target and six may be measured when VRAM
+  permits. `max_sessions=1` is not an acceptable product default or performance
+  solution. The production default may move from two to four only after the
+  documented real-hardware correctness, latency, fairness, tool-accuracy, and
+  VRAM gates pass.
 - A connection beyond the configured session limit is rejected immediately and
   explicitly; there is no user queue.
 - Conversation, VAD state, audio remainder, turn/revision, cancellation, IDs, and
@@ -76,7 +96,7 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
 - Each session is permanently assigned to its admitted `llama.cpp` sequence slot.
   Every generation uses that `id_slot` and `cache_prompt=true`, including a
   continuation after a tool result.
-- At most one structured tool call is allowed per Gemma generation and
+- At most one structured tool call is allowed per LLM generation and
   `parallel_tool_calls` is always false. Sequential calls may continue through
   LiveKit's existing `max_tool_steps` loop.
 - Tools are materialized through LiveKit's strict OpenAI-compatible FunctionTool
@@ -92,6 +112,10 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
 - STT and TTS use small bounded fair schedulers around the shared non-reentrant
   runtimes. Final STT outranks optional/droppable partial STT. Blocking ML work
   never blocks the asyncio event loop.
+- A multi-worker TTS scheduler preserves FIFO order within a session, schedules
+  sessions fairly, and never runs two segments of the same session concurrently.
+  A TTS pool is not permission to replicate Parakeet, the LLM, or complete
+  pipelines.
 - Disconnect and shutdown drain the complete handler chain before a slot is
   reusable. Timed-out drain is quarantined/stuck and remains occupied.
 - All queues, retries, reconnects, timeouts, headers, JSON messages, audio messages,
@@ -145,7 +169,7 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
   Test doubles live only below `tests/` and are explicitly injected.
 - GPU results must be measured on real hardware. If no NVIDIA GPU is available,
   mark GPU tests skipped/open and never simulate benchmarks or success.
-- Runtime readiness includes a real two-step structured Gemma tool-call probe
+- Runtime readiness includes a real two-step structured selected-LLM tool-call probe
   against the pinned GGUF/Jinja/`llama.cpp` stack. It uses a fixed internal result
   only as a startup compatibility probe, never as a production tool executor.
 - Contract coverage must prove the real LiveKit lifecycle:
@@ -153,8 +177,9 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
   update_chat_ctx() -> final generate_reply()`. Do not claim tool calling complete
   without that integration test.
 - GPU E2E tests must prove that no audio is emitted before the tool result, the
-  final result produces 24-kHz audio, and Parakeet, Gemma, and Qwen each remain
-  single-loaded. Performance claims require raw measurements and full provenance.
+  final result produces 24-kHz audio, Parakeet and the selected LLM remain
+  single-loaded, and Qwen load count equals the selected bounded worker count.
+  Performance claims require raw measurements and full provenance.
 - Keep Ruff, formatting, Mypy, CPU tests, package builds, container validation, and
   Kubernetes rendering green as their waves add them.
 - Do not push, publish, create a remote repository, or open a pull request without

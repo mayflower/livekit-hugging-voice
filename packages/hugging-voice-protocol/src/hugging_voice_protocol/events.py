@@ -24,6 +24,7 @@ MAX_ALL_TOOL_SCHEMAS_BYTES = 64 * 1_024
 MAX_TOOL_ARGUMENTS_CHARS = 16_000
 MAX_TOOL_OUTPUT_CHARS = 16_000
 MAX_PENDING_TOOL_CALLS = 1
+MAX_SPEAK_TEXT_CHARS = 500
 
 EventId = Annotated[str, Field(pattern=r"^evt_[A-Za-z0-9_-]{1,96}$", max_length=100)]
 SessionId = Annotated[str, Field(pattern=r"^session_[A-Za-z0-9_-]{1,88}$", max_length=96)]
@@ -159,7 +160,7 @@ class ServerVADConfig(StrictModel):
     threshold: float = Field(default=0.6, ge=0.1, le=0.95)
     min_speech_ms: int = Field(default=384, ge=96, le=2_000)
     min_speech_continuation_ms: int = Field(default=192, ge=0, le=1_000)
-    min_silence_ms: int = Field(default=500, ge=100, le=3_000)
+    min_silence_ms: int = Field(default=500, ge=250, le=3_000)
     speech_pad_ms: int = Field(default=30, ge=0, le=500)
     short_segment_merge_ms: Literal[0] = 0
 
@@ -189,8 +190,15 @@ class SessionConfig(StrictModel):
 class SessionModels(StrictModel):
     vad: Literal["silero-vad"] = "silero-vad"
     stt: Literal["nvidia/parakeet-tdt-0.6b-v3"] = "nvidia/parakeet-tdt-0.6b-v3"
-    llm: Literal["google/gemma-4-31B-it"] = "google/gemma-4-31B-it"
-    tts: Literal["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"] = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+    llm: Literal[
+        "google/gemma-4-31B-it",
+        "google/gemma-4-26B-A4B-it",
+        "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    ] = "google/gemma-4-31B-it"
+    tts: Literal[
+        "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+    ] = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
 
 
 class ModelRevisions(StrictModel):
@@ -329,6 +337,20 @@ class ResponseCreateEvent(EventBase):
         return self
 
 
+class ResponseSpeakEvent(EventBase):
+    type: Literal["response.speak"] = "response.speak"
+    text: str = Field(min_length=1, max_length=MAX_SPEAK_TEXT_CHARS)
+
+    @field_validator("text")
+    @classmethod
+    def reject_ssml(cls, value: str) -> str:
+        if "<speak" in value.casefold() or "</speak>" in value.casefold():
+            raise ValueError("response.speak does not accept SSML")
+        if not value.strip():
+            raise ValueError("response.speak text must contain visible text")
+        return value
+
+
 class ResponseCancelEvent(EventBase):
     type: Literal["response.cancel"] = "response.cancel"
     response_id: ResponseId
@@ -415,6 +437,7 @@ class ResponseOutputTextDoneEvent(ResponseEventBase):
 class ResponseOutputAudioDeltaEvent(ResponseEventBase):
     type: Literal["response.output_audio.delta"] = "response.output_audio.delta"
     sequence: int = Field(ge=0)
+    tts_worker_id: int | None = Field(default=None, ge=0, le=3)
     audio: str = Field(min_length=4, max_length=MAX_AUDIO_BASE64_CHARS)
 
     @field_validator("audio")
@@ -460,6 +483,7 @@ ClientEvent: TypeAlias = Annotated[
     | InputAudioBufferClearEvent
     | ConversationItemCreateEvent
     | ResponseCreateEvent
+    | ResponseSpeakEvent
     | ResponseCancelEvent,
     Field(discriminator="type"),
 ]

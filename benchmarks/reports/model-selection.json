@@ -1,0 +1,23 @@
+{
+  "baseline_commit": "9692abbe930c320ed1cd0b3e91088b543d153512",
+  "candidates": {
+    "compat_gemma31": {
+      "measurement_status": "open",
+      "selected": true
+    },
+    "gemma4_26b_a4b": {
+      "measurement_status": "open",
+      "selected": false
+    },
+    "qwen3_30b_a3b_2507": {
+      "measurement_status": "open",
+      "selected": false
+    }
+  },
+  "decision": "compatibility_default_retained",
+  "gpu_results": null,
+  "profile_id": "compat_gemma31_qwen17_ggml",
+  "reason": "No candidate has a real NVIDIA four-session report and completed 200-case tool evaluation.",
+  "schema_version": 1,
+  "tool_eval_results": null
+}

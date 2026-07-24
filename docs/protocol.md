@@ -42,6 +42,9 @@ stereo, unsupported-rate, and oversized audio is invalid.
   the service ACKs it with `conversation.item.created`.
 - `response.create`: request a response with optional tools and `auto`, `required`,
   `none`, or named tool choice.
+- `response.speak`: speak 1–500 plain-text characters with the session's fixed
+  language and voice. SSML, model, voice, and reference fields are rejected. It
+  uses the normal response lifecycle without an LLM inference.
 - `response.cancel`: identify the exact response and generation to cancel.
 
 ## Server events

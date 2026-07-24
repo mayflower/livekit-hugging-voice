@@ -4,6 +4,8 @@ metadata:
   name: hugging-voice-config
 data:
   config.yaml: |
+    profile_id: compat_gemma31_qwen17_ggml
+
     server:
       host: 0.0.0.0
       port: 8765
@@ -17,11 +19,22 @@ data:
       root: /models
       lock_file: /models/manifest.lock.json
       llama_server_binary: /usr/local/bin/llama-server
+      llm_profile: compat_gemma31
       llama_cpp_commit: 3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
       llama_port: 8081
       # llama_context_size is total context divided across all parallel slots.
       llama_context_size: 32768
       llama_parallel_slots: 2
+      # Narrow options verified at llama_cpp_commit. Defaults preserve upstream
+      # batching and KV behavior; measured profiles may choose only these values.
+      llama_flash_attention: auto
+      llama_continuous_batching: true
+      llama_batch_size: 2048
+      llama_ubatch_size: 512
+      llama_cache_type_k: f16
+      llama_cache_type_v: f16
+      llama_cache_reuse: 0
+      llama_metrics: true
       llama_startup_timeout_seconds: 600.0
       llama_shutdown_timeout_seconds: 15.0
     audio:
@@ -42,6 +55,18 @@ data:
       speech_pad_ms: 30
       short_segment_merge_ms: 0
       interrupt_response: true
+    transcription:
+      # Optional partial STT competes with final STT on the shared runtime.
+      partial_enabled: false
+      partial_interval_ms: 1000
+      # Each partial sees only this trailing window, never the complete growing turn.
+      partial_max_audio_ms: 4000
+    tts:
+      # Compatibility stays the default until a real GPU profile passes all gates.
+      profile: compat_qwen3_tts_1_7b_ggml
+      chunk_size: 12
+      worker_count: 1
+      deployment_mode: production
     speech:
       default_language: de
       default_voice: warm_female
@@ -58,6 +83,13 @@ data:
         top_k: 50
         top_p: 1.0
         repetition_penalty: 1.05
+      segmentation:
+        first_segment_max_characters: 72
+        next_segment_max_characters: 140
+        hard_max_characters: 160
+      llm:
+        tool_decision_max_tokens: 96
+        voice_reply_max_tokens: 128
       system_prompt: >-
         You are having a spoken conversation. Respond naturally and directly.
         Do not use Markdown. Usually answer in no more than two or three short sentences.

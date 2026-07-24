@@ -18,6 +18,7 @@ from hugging_voice_service.schedulers.tts import (
 )
 from hugging_voice_service.schedulers.tts import (
     TTSJob,
+    TTSPriority,
     TTSScheduler,
 )
 from hugging_voice_service.telemetry import ServiceTelemetry
@@ -81,7 +82,13 @@ def token(session: str, generation: str) -> GenerationToken:
     )
 
 
-def tts_job(session: str, value: str, frames: list[bytes] | None = None) -> TTSJob:
+def tts_job(
+    session: str,
+    value: str,
+    frames: list[bytes] | None = None,
+    *,
+    priority: TTSPriority = "final_response",
+) -> TTSJob:
     async def record(frame: bytes) -> None:
         if frames is not None:
             frames.append(frame)
@@ -93,6 +100,7 @@ def tts_job(session: str, value: str, frames: list[bytes] | None = None) -> TTSJ
         instructions="calm",
         is_current=lambda: True,
         on_frame=record,
+        priority=priority,
     )
 
 
@@ -222,4 +230,182 @@ async def test_tts_forwards_each_frame_before_segment_generation_finishes() -> N
         assert emitted == [b"first", b"second"]
     finally:
         continue_generation.set()
+        await scheduler.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_count", [4, 8, 16])
+@pytest.mark.parametrize("worker_count", [1, 2])
+async def test_tts_pool_is_fair_and_never_runs_one_session_on_two_workers(
+    session_count: int,
+    worker_count: int,
+) -> None:
+    active_sessions: set[str] = set()
+    duplicate_session = False
+    maximum_active = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+    per_session: dict[str, list[str]] = {}
+
+    class CoordinatedRuntime(RecordingTTS):
+        async def stream_pcm16_frames(
+            self,
+            text: str,
+            *,
+            language: str,
+            instructions: str,
+            ref_audio: Path | None,
+            ref_text: str | None,
+            cancelled: Callable[[], bool],
+        ) -> AsyncIterator[bytes]:
+            nonlocal duplicate_session, maximum_active
+            del language, instructions, ref_audio, ref_text
+            session_id, _separator, _index = text.partition(":")
+            if session_id in active_sessions:
+                duplicate_session = True
+            active_sessions.add(session_id)
+            maximum_active = max(maximum_active, len(active_sessions))
+            per_session.setdefault(session_id, []).append(text)
+            if len(active_sessions) == worker_count:
+                started.set()
+            await release.wait()
+            if not cancelled():
+                yield bytes(960)
+            active_sessions.remove(session_id)
+
+    scheduler = TTSScheduler(
+        [CoordinatedRuntime() for _ in range(worker_count)],
+        telemetry=ServiceTelemetry(),
+        max_jobs=session_count + 1,
+    )
+    tasks = [
+        asyncio.create_task(scheduler.synthesize(tts_job(f"s{index}", f"s{index}:0")))
+        for index in range(session_count)
+    ]
+    tasks.append(asyncio.create_task(scheduler.synthesize(tts_job("s0", "s0:1"))))
+    await scheduler.start()
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        release.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=2.0)
+        assert not duplicate_session
+        assert maximum_active == worker_count
+        assert per_session["s0"] == ["s0:0", "s0:1"]
+        assert set(per_session) == {f"s{index}" for index in range(session_count)}
+    finally:
+        release.set()
+        await scheduler.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tts_priority_and_round_robin_follow_arrival_not_session_name() -> None:
+    runtime = RecordingTTS()
+    scheduler = TTSScheduler(runtime, telemetry=ServiceTelemetry())
+    tasks = [
+        asyncio.create_task(
+            scheduler.synthesize(
+                tts_job(
+                    "session_z",
+                    "filler",
+                    priority="filler_or_explicit_say",
+                )
+            )
+        ),
+        asyncio.create_task(scheduler.synthesize(tts_job("session_m", "final-m"))),
+        asyncio.create_task(scheduler.synthesize(tts_job("session_a", "final-a"))),
+    ]
+    await asyncio.sleep(0)
+    await scheduler.start()
+    try:
+        await asyncio.gather(*tasks)
+        assert runtime.calls == ["final-m", "final-a", "filler"]
+    finally:
+        await scheduler.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tts_worker_failure_is_scoped_and_worker_continues() -> None:
+    class FailingRuntime(RecordingTTS):
+        async def stream_pcm16_frames(
+            self,
+            text: str,
+            *,
+            language: str,
+            instructions: str,
+            ref_audio: Path | None,
+            ref_text: str | None,
+            cancelled: Callable[[], bool],
+        ) -> AsyncIterator[bytes]:
+            if text == "bad":
+                raise RuntimeError("deliberate job failure")
+            async for frame in super().stream_pcm16_frames(
+                text,
+                language=language,
+                instructions=instructions,
+                ref_audio=ref_audio,
+                ref_text=ref_text,
+                cancelled=cancelled,
+            ):
+                yield frame
+
+    runtime = FailingRuntime()
+    scheduler = TTSScheduler(runtime, telemetry=ServiceTelemetry())
+    await scheduler.start()
+    try:
+        with pytest.raises(RuntimeError, match="deliberate"):
+            await scheduler.synthesize(tts_job("session_bad", "bad"))
+        await scheduler.synthesize(tts_job("session_good", "good"))
+        assert runtime.calls == ["good"]
+    finally:
+        await scheduler.aclose()
+
+
+@pytest.mark.asyncio
+async def test_tts_active_cancellation_closes_job_and_releases_session() -> None:
+    started = asyncio.Event()
+    cancellation_observed = asyncio.Event()
+    current = True
+
+    class CancellableRuntime(RecordingTTS):
+        async def stream_pcm16_frames(
+            self,
+            text: str,
+            *,
+            language: str,
+            instructions: str,
+            ref_audio: Path | None,
+            ref_text: str | None,
+            cancelled: Callable[[], bool],
+        ) -> AsyncIterator[bytes]:
+            del text, language, instructions, ref_audio, ref_text
+            started.set()
+            await cancellation_observed.wait()
+            assert cancelled()
+            if not cancelled():
+                yield b""
+
+    async def on_frame(frame: bytes) -> None:
+        del frame
+
+    job = TTSJob(
+        token=token("session_active", "active"),
+        text="active",
+        language="German",
+        instructions="calm",
+        is_current=lambda: current,
+        on_frame=on_frame,
+    )
+    scheduler = TTSScheduler(CancellableRuntime(), telemetry=ServiceTelemetry())
+    await scheduler.start()
+    task = asyncio.create_task(scheduler.synthesize(job))
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        current = False
+        cancellation_observed.set()
+        await scheduler.cancel_generation(job.token)
+        await asyncio.wait_for(task, timeout=1.0)
+        await asyncio.wait_for(scheduler.wait_session_idle("session_active"), timeout=1.0)
+    finally:
+        current = False
+        cancellation_observed.set()
         await scheduler.aclose()

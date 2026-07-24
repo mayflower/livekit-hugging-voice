@@ -22,7 +22,8 @@ LiveKit Agent
   -> 24 kHz PCM16 audio in the configured language and voice
 ```
 
-Each GPU pod loads Parakeet, Gemma, and Qwen once. Session capacity is
+Each GPU pod loads Parakeet and one selected LLM once, plus the configured bounded
+pool of one or two Qwen runtimes in production. Session capacity is
 operator-configurable; the default is two for compatibility. This default is not
 a performance guarantee.
 
@@ -33,7 +34,7 @@ voice profiles. `de` and `warm_female` are the defaults. The default
 
 ## Status
 
-Version 0.2.0 includes the native LiveKit plugin and tool calling, the offline CUDA
+Version 0.3.0 includes the native LiveKit plugin and tool calling, the offline CUDA
 service, configurable bounded sessions, exact model delivery, Docker Compose,
 Kustomize, capacity-aware pod discovery, CPU contracts, and reproducible GPU
 benchmark tooling.
@@ -161,10 +162,10 @@ install the LiveKit agent or fetch model weights.
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — process and isolation design
-- [`docs/protocol.md`](docs/protocol.md) — authenticated WebSocket version 1
+- [`docs/protocol.md`](docs/protocol.md) — authenticated WebSocket protocol v2
 - [`docs/model-delivery.md`](docs/model-delivery.md) — exact offline model lock
 - [`docs/security.md`](docs/security.md) — trust and secret boundary
-- [`docs/benchmarks.md`](docs/benchmarks.md) — measured two-session methodology
+- [`docs/benchmarks.md`](docs/benchmarks.md) — N-session measurement methodology
 - [`docs/model-selection.md`](docs/model-selection.md) — German voice audition
 
 Pinned source analysis is recorded in

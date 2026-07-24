@@ -5,4 +5,4 @@ from livekit.plugins import hugging_voice
 
 def test_workspace_packages_import_together() -> None:
     assert PROTOCOL_VERSION == 2
-    assert service_version == hugging_voice.__version__ == "0.2.0"
+    assert service_version == hugging_voice.__version__ == "0.3.0"

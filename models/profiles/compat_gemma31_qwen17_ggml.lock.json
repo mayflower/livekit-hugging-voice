@@ -1,0 +1,61 @@
+{
+  "profile_id": "compat_gemma31_qwen17_ggml",
+  "models": [
+    {
+      "delivery": "huggingface",
+      "files": [
+        {
+          "path": "gemma-4-31B-it-Q4_0.gguf",
+          "sha256": "031dc1c5fa9c5a0abbf3c39c5173fb2af65f5ac2dc2a090268561d3c72dcd834",
+          "size": 17992313088
+        }
+      ],
+      "id": "google/gemma-4-31B-it",
+      "license": "Apache-2.0",
+      "revision": "83233b01829859b51252aa4fd1de1cf9e1cf91cc",
+      "source_repo": "ggml-org/gemma-4-31B-it-GGUF"
+    },
+    {
+      "delivery": "huggingface",
+      "files": [
+        {
+          "path": "parakeet-tdt-0.6b-v3.nemo",
+          "sha256": "3cbdc85877e668ca7b82d0d56770eb1fac76691f55d6b97545e8d61ca588d10d",
+          "size": 2509332480
+        }
+      ],
+      "id": "nvidia/parakeet-tdt-0.6b-v3",
+      "license": "CC-BY-4.0",
+      "revision": "7c35754d166cca382ad1e53e68b01e7c575f3a1d",
+      "source_repo": "nvidia/parakeet-tdt-0.6b-v3"
+    },
+    {
+      "delivery": "huggingface",
+      "files": [
+        {
+          "path": "qwen-talker-1.7b-base-BF16.gguf",
+          "size": 3876199616,
+          "sha256": "7f4567113f3aa07e842fac6d17a10a98cf3d0068c0871ac245ac9befc63affa5"
+        },
+        {
+          "path": "qwen-tokenizer-12hz-BF16.gguf",
+          "sha256": "cc04d7352ff4cb339435cdccf59cf38e6e92f3cf789bc94a6a1b467093bafa18",
+          "size": 358980384
+        }
+      ],
+      "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+      "license": "Apache-2.0",
+      "revision": "e0f336a048a3de02b29b8ad92969217d9ecffe3e",
+      "source_repo": "Serveurperso/Qwen3-TTS-GGUF"
+    },
+    {
+      "delivery": "python-package",
+      "files": [],
+      "id": "silero-vad",
+      "license": "MIT",
+      "revision": "6.2.1",
+      "source_repo": "pypi:silero-vad"
+    }
+  ],
+  "schema_version": 1
+}

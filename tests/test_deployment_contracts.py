@@ -112,6 +112,7 @@ def test_delivery_files_use_immutable_images_and_have_no_embedded_model_copy() -
     assert "HF_HUB_OFFLINE=1" in dockerfile
     assert "TRANSFORMERS_OFFLINE=1" in dockerfile
     assert "-DLLAMA_BUILD_UI=OFF" in dockerfile
+    assert "COPY services/gpu-service/config/profiles/ /etc/hugging-voice/profiles/" in dockerfile
 
     build_script = (REPO_ROOT / "services/gpu-service/scripts/build_llama_cpp.py").read_text(
         encoding="utf-8"
@@ -156,6 +157,18 @@ def test_compose_mounts_model_root_and_generated_lock_read_only() -> None:
     )
     assert mounts[lock_target]["read_only"] is True
     assert service["environment"]["HV_MODELS__LOCK_FILE"] == lock_target
+    assert service["environment"]["HV_PROFILE_ID"] == (
+        "${HUGGING_VOICE_PROFILE_ID:-compat_gemma31_qwen17_ggml}"
+    )
+    assert service["environment"]["HV_MODELS__LLM_PROFILE"] == (
+        "${HUGGING_VOICE_LLM_PROFILE:-compat_gemma31}"
+    )
+    assert service["environment"]["HV_TTS__PROFILE"] == (
+        "${HUGGING_VOICE_TTS_PROFILE:-compat_qwen3_tts_1_7b_ggml}"
+    )
+    assert service["environment"]["HV_TTS__WORKER_COUNT"] == (
+        "${HUGGING_VOICE_TTS_WORKER_COUNT:-1}"
+    )
     assert service["environment"]["HV_SERVER__MAX_SESSIONS"] == "${HUGGING_VOICE_MAX_SESSIONS:-2}"
     assert (
         service["environment"]["HV_MODELS__LLAMA_PARALLEL_SLOTS"]
@@ -168,8 +181,8 @@ def test_compose_mounts_model_root_and_generated_lock_read_only() -> None:
     assert "/tmp:rw,noexec,nosuid,size=4g,uid=10001,gid=10001" in service["tmpfs"]
 
 
-def test_configmap_speech_section_matches_the_default_config() -> None:
+def test_configmap_matches_the_complete_default_profile() -> None:
     configmap = load_yaml("deploy/kubernetes/base/config-map.yaml")
     embedded = yaml.safe_load(configmap["data"]["config.yaml"])
     default = load_yaml("services/gpu-service/config/default.yaml")
-    assert embedded["speech"] == default["speech"]
+    assert embedded == default

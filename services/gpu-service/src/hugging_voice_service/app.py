@@ -44,7 +44,7 @@ def create_app(
             await realtime_service.aclose()
             await service_lifecycle.aclose()
 
-    app = FastAPI(title="Hugging Voice GPU Service", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Hugging Voice GPU Service", version="0.3.0", lifespan=lifespan)
     app.state.lifecycle = service_lifecycle
     app.state.realtime = realtime_service
 
@@ -104,8 +104,10 @@ def create_app(
     @app.get("/metrics")
     async def metrics() -> Response:
         await service_lifecycle.observe_gpu_memory()
+        service_metrics = service_lifecycle.telemetry.render()
+        llama_metrics = await service_lifecycle.llama_metrics()
         return Response(
-            content=service_lifecycle.telemetry.render(),
+            content=service_metrics + (b"\n" + llama_metrics if llama_metrics else b""),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 

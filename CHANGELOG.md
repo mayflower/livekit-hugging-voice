@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 - unreleased
+
+- Generalize the measured soak driver to 1–16 isolated sessions with barrier,
+  staggered, normal, tool, and mixed workloads plus p50/p95/p99 and fairness.
+- Add bounded VAD/STT/segmentation/prefix-prefill controls and raw llama.cpp
+  metrics without changing the unmeasured compatibility defaults.
+- Add the pinned Qwen3-TTS 0.6B CUDA-graph candidate and a fair one- or two-worker
+  TTS pool; compatibility keeps the 1.7B GGML runtime.
+- Add three closed llama.cpp LLM profiles and a reproducible 200-case multilingual
+  tool-evaluation corpus. No candidate is selected without real GPU measurements.
+- Add native bounded `RealtimeSession.say()` through `response.speak`, using TTS
+  directly without a second LLM inference.
+
 ## 0.2.0 - unreleased
 
 - Make `voice_clone` the default TTS mode: the Qwen3-TTS base talker speaks the

@@ -31,7 +31,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--phase", required=True, choices=("idle", "warm", "one_session", "two_sessions")
+        "--phase",
+        required=True,
+        choices=(
+            "idle",
+            "warm",
+            "one_session",
+            "two_sessions",
+            "four_sessions",
+            "six_sessions",
+        ),
     )
     parser.add_argument("--interval", type=float, default=1.0)
     parser.add_argument("--duration", type=float, default=0.0, help="0 records until interrupted")

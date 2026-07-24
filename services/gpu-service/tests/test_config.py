@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from hugging_voice_service.config import (
+    SegmentationSettings,
     ServiceSettings,
     SpeechSettings,
     VoiceReference,
@@ -27,6 +28,25 @@ def test_default_config_matches_fixed_audio_and_capacity_contract() -> None:
     assert "native German speaker" in rendered
     assert "Keep the speaker identity unchanged across every utterance" in rendered
     assert settings.speech.generation.do_sample is True
+    assert settings.transcription.partial_enabled is False
+    assert settings.transcription.partial_interval_ms == 1_000
+    assert settings.transcription.partial_max_audio_ms == 4_000
+    assert settings.speech.segmentation.first_segment_max_characters == 72
+    assert settings.speech.segmentation.next_segment_max_characters == 140
+    assert settings.speech.segmentation.hard_max_characters == 160
+    assert settings.speech.llm.tool_decision_max_tokens == 96
+    assert settings.speech.llm.voice_reply_max_tokens == 128
+    assert settings.models.llama_flash_attention == "auto"
+    assert settings.models.llama_continuous_batching is True
+    assert settings.models.llama_batch_size == 2_048
+    assert settings.models.llama_ubatch_size == 512
+    assert settings.models.llama_cache_type_k == "f16"
+    assert settings.models.llama_cache_type_v == "f16"
+    assert settings.models.llama_cache_reuse == 0
+    assert settings.models.llama_metrics is True
+    assert settings.tts.profile == "compat_qwen3_tts_1_7b_ggml"
+    assert settings.tts.chunk_size == 12
+    assert settings.tts.worker_count == 1
     assert settings.speech.tts_mode == "voice_clone"
     for voice_id, voice in settings.speech.voices.items():
         assert set(voice.refs) == set(settings.speech.languages)
@@ -35,6 +55,41 @@ def test_default_config_matches_fixed_audio_and_capacity_contract() -> None:
             assert reference.text
     assert set(settings.speech.languages) == {"de", "en", "fr", "it"}
     assert len(settings.speech.voices) == 5
+
+
+@pytest.mark.parametrize(
+    ("filename", "profile_id", "llm_profile", "sessions", "workers"),
+    [
+        ("compat.yaml", "compat_gemma31_qwen17_ggml", "compat_gemma31", 2, 1),
+        (
+            "multisession-gemma-a4b.yaml",
+            "multisession_gemma_a4b_qwen06_cuda",
+            "gemma4_26b_a4b",
+            4,
+            2,
+        ),
+        (
+            "multisession-qwen-a3b.yaml",
+            "multisession_qwen_a3b_qwen06_cuda",
+            "qwen3_30b_a3b_2507",
+            4,
+            2,
+        ),
+    ],
+)
+def test_complete_version_03_profiles_validate(
+    filename: str,
+    profile_id: str,
+    llm_profile: str,
+    sessions: int,
+    workers: int,
+) -> None:
+    settings = load_settings(DEFAULT_CONFIG.parent / "profiles" / filename)
+    assert settings.profile_id == profile_id
+    assert settings.models.llm_profile == llm_profile
+    assert settings.server.max_sessions == sessions
+    assert settings.models.llama_parallel_slots == sessions
+    assert settings.tts.worker_count == workers
 
 
 def test_voice_style_is_scoped_without_replacing_the_fixed_identity() -> None:
@@ -51,11 +106,13 @@ def test_environment_overrides_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HV_MODELS__LLAMA_PARALLEL_SLOTS", "8")
     monkeypatch.setenv("HV_MODELS__LLAMA_CONTEXT_SIZE", "65536")
     monkeypatch.setenv("HV_SERVER__PORT", "9000")
+    monkeypatch.setenv("HV_TTS__CHUNK_SIZE", "8")
     settings = load_settings(DEFAULT_CONFIG)
     assert settings.server.max_sessions == 8
     assert settings.models.llama_parallel_slots == 8
     assert settings.models.llama_context_size == 65_536
     assert settings.server.port == 9000
+    assert settings.tts.chunk_size == 8
 
 
 def test_capacity_is_bounded_and_matches_llama_slots() -> None:
@@ -76,6 +133,78 @@ def test_capacity_is_bounded_and_matches_llama_slots() -> None:
     with pytest.raises(ValidationError, match="at least 2048 tokens"):
         ServiceSettings(
             models={"llama_parallel_slots": 20, "llama_context_size": 32_768}  # type: ignore[arg-type]
+        )
+
+
+def test_latency_configuration_is_strictly_bounded() -> None:
+    with pytest.raises(ValidationError):
+        ServiceSettings(vad={"min_silence_ms": 249})  # type: ignore[arg-type]
+    for silence_ms in (300, 350, 500):
+        assert (
+            ServiceSettings(vad={"min_silence_ms": silence_ms}).vad.min_silence_ms  # type: ignore[arg-type]
+            == silence_ms
+        )
+    with pytest.raises(ValidationError):
+        ServiceSettings(
+            transcription={"partial_max_audio_ms": 999}  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError, match="first_segment_max_characters"):
+        SpeechSettings(
+            segmentation=SegmentationSettings(
+                first_segment_max_characters=150,
+                next_segment_max_characters=140,
+                hard_max_characters=160,
+            )
+        )
+    with pytest.raises(ValidationError, match="ubatch"):
+        ServiceSettings(
+            models={"llama_batch_size": 256, "llama_ubatch_size": 512}  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError):
+        ServiceSettings(
+            models={"llama_extra_args": ["--dangerous"]}  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError, match="requires qwen3_tts_0_6b_cuda"):
+        ServiceSettings(tts={"worker_count": 2})  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match=r"cannot exceed server\.max_sessions"):
+        ServiceSettings(
+            server={"max_sessions": 1},  # type: ignore[arg-type]
+            tts={
+                "profile": "qwen3_tts_0_6b_cuda",
+                "worker_count": 2,
+            },  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValidationError, match="production TTS worker_count"):
+        ServiceSettings(
+            server={"max_sessions": 4},  # type: ignore[arg-type]
+            models={
+                "llama_parallel_slots": 4,
+                "llama_context_size": 32_768,
+            },  # type: ignore[arg-type]
+            tts={
+                "profile": "qwen3_tts_0_6b_cuda",
+                "worker_count": 3,
+            },  # type: ignore[arg-type]
+        )
+    benchmark = ServiceSettings(
+        profile_id="multisession_gemma_a4b_qwen06_cuda",
+        server={"max_sessions": 4},  # type: ignore[arg-type]
+        models={
+            "llm_profile": "gemma4_26b_a4b",
+            "llama_parallel_slots": 4,
+            "llama_context_size": 32_768,
+        },  # type: ignore[arg-type]
+        tts={
+            "profile": "qwen3_tts_0_6b_cuda",
+            "worker_count": 4,
+            "deployment_mode": "benchmark",
+            "chunk_size": 4,
+        },  # type: ignore[arg-type]
+    )
+    assert benchmark.tts.worker_count == 4
+    with pytest.raises(ValidationError, match="profile_id does not match"):
+        ServiceSettings(
+            models={"llm_profile": "gemma4_26b_a4b"},  # type: ignore[arg-type]
         )
 
 

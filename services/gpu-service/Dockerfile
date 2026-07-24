@@ -85,6 +85,7 @@ COPY --from=python-builder /opt/python /opt/python
 COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=llama-builder /build/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
 COPY services/gpu-service/config/default.yaml /etc/hugging-voice/config.yaml
+COPY services/gpu-service/config/profiles/ /etc/hugging-voice/profiles/
 COPY models/manifest.yaml /etc/hugging-voice/manifest.yaml
 ARG LLAMA_CPP_COMMIT=3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
 ARG VCS_REF=unknown

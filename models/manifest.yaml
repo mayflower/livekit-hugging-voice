@@ -1,4 +1,5 @@
 schema_version: 1
+profile_id: compat_gemma31_qwen17_ggml
 models:
   - delivery: huggingface
     id: google/gemma-4-31B-it

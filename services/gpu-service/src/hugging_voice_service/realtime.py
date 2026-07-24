@@ -30,6 +30,7 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 
 from .capacity import CapacityManager
 from .lifecycle import LifecyclePhase, ServiceLifecycle
+from .llm_profiles import resolve_llm_profile
 from .pipeline import GemmaStreamer, PipelineEventError, VoicePipeline
 from .runtimes.silero import SessionVAD
 from .schedulers.stt import STTRuntime, STTScheduler
@@ -225,8 +226,11 @@ class RealtimeService:
             cast(STTRuntime, self.lifecycle.parakeet),
             telemetry=self.lifecycle.telemetry,
         )
+        qwen_runtimes = getattr(self.lifecycle.qwen, "runtimes", (self.lifecycle.qwen,))
+        if len(qwen_runtimes) != self.settings.tts.worker_count:
+            raise RuntimeError("loaded TTS runtime count does not match tts.worker_count")
         self._tts = TTSScheduler(
-            cast(TTSRuntime, self.lifecycle.qwen),
+            tuple(cast(TTSRuntime, runtime) for runtime in qwen_runtimes),
             telemetry=self.lifecycle.telemetry,
         )
         await self._stt.start()
@@ -510,6 +514,7 @@ class RealtimeService:
             tts=self._tts,
             gemma=cast(GemmaStreamer, self.lifecycle.gemma),
             speech=self.settings.speech,
+            transcription=self.settings.transcription,
             telemetry=self.lifecycle.telemetry,
         )
 
@@ -518,15 +523,28 @@ class RealtimeService:
         if lock is None:
             raise RuntimeError("verified model lock is unavailable")
         revisions = {model.id: model.revision for model in lock.models}
+        llm_model = resolve_llm_profile(self.settings.models.llm_profile).model_id
+        if self.settings.tts.profile == "qwen3_tts_0_6b_cuda":
+            models = SessionModels(
+                llm=llm_model,  # type: ignore[arg-type]
+                tts="Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+            )
+            tts_model = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+        else:
+            models = SessionModels(
+                llm=llm_model,  # type: ignore[arg-type]
+                tts="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+            )
+            tts_model = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
         return SessionCreatedEvent(
             event_id=_id("evt"),
             session_id=session_id,
-            models=SessionModels(),
+            models=models,
             revisions=ModelRevisions(
                 vad=revisions["silero-vad"],
                 stt=revisions["nvidia/parakeet-tdt-0.6b-v3"],
-                llm=revisions["google/gemma-4-31B-it"],
-                tts=revisions["Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"],
+                llm=revisions[llm_model],
+                tts=revisions[tts_model],
             ),
             language=self.settings.speech.default_language,
             voice=self.settings.speech.default_voice,

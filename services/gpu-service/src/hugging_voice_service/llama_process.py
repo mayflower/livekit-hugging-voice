@@ -12,6 +12,8 @@ from typing import Any
 
 import aiohttp
 
+from .llm_profiles import LLMProfile, resolve_llm_profile
+
 LLAMA_CPP_COMMIT = "3ce7da2c852c538c4c5f9806da27029cf8c9cc4a"
 
 logger = logging.getLogger(__name__)
@@ -39,9 +41,18 @@ class LlamaProcess:
         *,
         binary: Path,
         model: Path,
+        profile: LLMProfile | None = None,
         port: int = 8081,
         parallel_slots: int = 2,
         context_size: int = 32_768,
+        flash_attention: str = "auto",
+        continuous_batching: bool = True,
+        batch_size: int = 2_048,
+        ubatch_size: int = 512,
+        cache_type_k: str = "f16",
+        cache_type_v: str = "f16",
+        cache_reuse: int = 0,
+        metrics: bool = True,
         startup_timeout: float = 600.0,
         shutdown_timeout: float = 15.0,
     ) -> None:
@@ -49,11 +60,30 @@ class LlamaProcess:
             raise ValueError("parallel_slots must be between 1 and 64")
         if context_size < parallel_slots * 2_048:
             raise ValueError("context_size must provide at least 2048 tokens per slot")
+        if flash_attention not in {"auto", "on"}:
+            raise ValueError("flash_attention must be 'auto' or 'on'")
+        if not continuous_batching:
+            raise ValueError("continuous batching is required")
+        if not 32 <= ubatch_size <= batch_size <= 4_096:
+            raise ValueError("batch sizes must satisfy 32 <= ubatch_size <= batch_size <= 4096")
+        if cache_type_k not in {"f16", "q8_0"} or cache_type_v not in {"f16", "q8_0"}:
+            raise ValueError("KV cache types must be 'f16' or 'q8_0'")
+        if not 0 <= cache_reuse <= 2_048:
+            raise ValueError("cache_reuse must be between 0 and 2048")
+        if not metrics:
+            raise ValueError("the llama.cpp metrics endpoint is required")
         self.binary = binary
         self.model = model
+        self.profile = profile or resolve_llm_profile("compat_gemma31")
         self.port = port
         self.parallel_slots = parallel_slots
         self.context_size = context_size
+        self.flash_attention = flash_attention
+        self.batch_size = batch_size
+        self.ubatch_size = ubatch_size
+        self.cache_type_k = cache_type_k
+        self.cache_type_v = cache_type_v
+        self.cache_reuse = cache_reuse
         self.startup_timeout = startup_timeout
         self.shutdown_timeout = shutdown_timeout
         self.state = LlamaProcessState.STOPPED
@@ -81,13 +111,27 @@ class LlamaProcess:
             str(self.parallel_slots),
             "--ctx-size",
             str(self.context_size),
+            "--cont-batching",
+            "--flash-attn",
+            self.flash_attention,
+            "--batch-size",
+            str(self.batch_size),
+            "--ubatch-size",
+            str(self.ubatch_size),
+            "--cache-type-k",
+            self.cache_type_k,
+            "--cache-type-v",
+            self.cache_type_v,
+            "--cache-reuse",
+            str(self.cache_reuse),
+            "--metrics",
             "--n-predict",
             "256",
             "--n-gpu-layers",
             "all",
             "--jinja",
             "--reasoning-format",
-            "deepseek",
+            "deepseek" if self.profile.reasoning_mode == "filtered" else "none",
             "--no-webui",
             "--no-ui-mcp-proxy",
         )
@@ -102,7 +146,7 @@ class LlamaProcess:
         if not self.binary.is_file() or not os.access(self.binary, os.X_OK):
             raise LlamaProcessError(f"llama-server is missing or not executable: {self.binary}")
         if not self.model.is_file():
-            raise LlamaProcessError(f"Gemma GGUF is missing: {self.model}")
+            raise LlamaProcessError(f"selected LLM GGUF is missing: {self.model}")
         self.state = LlamaProcessState.STARTING
         self.failure = None
         self.failure_event.clear()
@@ -155,6 +199,17 @@ class LlamaProcess:
         self._log_tasks.clear()
         self.state = LlamaProcessState.STOPPED
 
+    async def metrics(self) -> bytes:
+        """Return the pinned server's raw Prometheus exposition."""
+
+        timeout = aiohttp.ClientTimeout(total=2.0)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(f"{self.base_url}/metrics") as response:
+                payload = await response.read()
+                if response.status != 200:
+                    raise LlamaProcessError(f"llama-server metrics failed status={response.status}")
+                return payload
+
     async def _wait_until_ready(self) -> None:
         deadline = asyncio.get_running_loop().time() + self.startup_timeout
         timeout = aiohttp.ClientTimeout(total=5.0)
@@ -176,7 +231,7 @@ class LlamaProcess:
 
     async def _probe_generation(self, session: aiohttp.ClientSession) -> None:
         payload: dict[str, Any] = {
-            "model": "gemma-4-31b",
+            "model": self.profile.llama_server_alias,
             "messages": [{"role": "user", "content": "Addiere 19 und 23."}],
             "tools": [
                 {
@@ -199,19 +254,19 @@ class LlamaProcess:
             ],
             "tool_choice": "required",
             "parallel_tool_calls": False,
-            "max_tokens": 128,
-            "temperature": 0,
+            "max_tokens": self.profile.tool_decision_max_tokens,
+            "temperature": self.profile.tool_temperature,
             "stream": False,
             "cache_prompt": True,
             "id_slot": 0,
-            "chat_template_kwargs": {"enable_thinking": False},
         }
+        if self.profile.chat_template_kwargs:
+            payload["chat_template_kwargs"] = dict(self.profile.chat_template_kwargs)
         async with session.post(f"{self.base_url}/v1/chat/completions", json=payload) as response:
             body = await response.text()
             if response.status != 200:
                 raise LlamaProcessError(
-                    f"llama-server readiness generation failed status={response.status} "
-                    f"body={body[:512]!r}"
+                    f"llama-server readiness generation failed status={response.status}"
                 )
         try:
             first = json.loads(body)
@@ -236,8 +291,7 @@ class LlamaProcess:
             body = await response.text()
             if response.status != 200:
                 raise LlamaProcessError(
-                    f"llama-server tool-result probe failed status={response.status} "
-                    f"body={body[:512]!r}"
+                    f"llama-server tool-result probe failed status={response.status}"
                 )
         try:
             final = json.loads(body)["choices"][0]["message"]["content"]
@@ -259,8 +313,10 @@ class LlamaProcess:
 
     async def _forward_logs(self, stream: asyncio.StreamReader, level: int) -> None:
         while line := await stream.readline():
+            # llama.cpp may include prompts or tool payloads in diagnostics.
+            # Preserve stream activity and size without forwarding content.
             logger.log(
                 level,
                 "llama_server",
-                extra={"child_message": line.decode(errors="replace").rstrip()},
+                extra={"child_message": "<redacted>", "child_message_bytes": len(line)},
             )

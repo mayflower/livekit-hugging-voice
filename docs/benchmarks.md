@@ -1,40 +1,59 @@
-# Benchmark method
+# N-session benchmark method
 
 Tool-turn records add decision, call, execution, result-ACK, final text/audio,
-call/result size, slot, error, cancellation, and stale timestamps. Summaries must
-separate one- and two-session p50/p95/p99 results and retain full provenance.
-Run the existing two-session driver with `--tool-turns --skip-barge-in-probe`;
-the driver returns the bounded `add_numbers` result and measures both Gemma passes.
+call/result size, slot, error, cancellation, and stale timestamps. The N-session
+matrix separates concurrency 1, 2, 4 and optionally 6; normal, tool and mixed
+workloads; and staggered versus barrier arrivals. Summaries retain p50/p95/p99
+overall and per session, fairness, turns/minute, queue maxima, correctness
+violations, and full provenance.
+
+The benchmark driver is `benchmarks/multisession_soak.py`. It deterministically
+rotates repeated `--wav` inputs across 1–16 requested sessions.
 
 Benchmark reports are evidence, not configuration targets. They are generated only
 from real service events and real NVIDIA telemetry. The repository intentionally
 contains no populated performance report because the current checkout has no locked
 model volume.
 
-Start the verified GPU service, prepare two different German mono 16 kHz PCM16 WAV
-files, and record GPU state in one terminal:
+The complete acceptance matrix uses identical WAV hashes and seeds for each profile:
+
+```text
+sessions: 1, 2, 4 (6 only when VRAM permits)
+arrival: staggered, barrier
+workload: normal, tool, mixed
+smoke duration: 3–5 minutes
+acceptance duration: 30 minutes
+```
+
+Start the verified GPU service, prepare at least two different mono 16 kHz PCM16
+WAV files, and record GPU state in another terminal. Raw reports must identify the
+selected profile, concurrency, arrival mode, workload, commit, image digest, model
+revisions, quantizations, runtime versions, hardware, driver, CUDA, WAV hashes,
+seed, requested duration, actual duration, slots and TTS workers.
 
 ```bash
 uv run python benchmarks/gpu_memory.py \
-  --phase two_sessions --output benchmarks/reports/gpu-memory-two.csv --duration 1900
+  --phase four_sessions --output benchmarks/reports/gpu-memory-four.csv --duration 1900
 ```
 
 Run one session and then two overlapping sessions for 30 minutes each:
 
 ```bash
-uv run python benchmarks/two_session_soak.py \
+uv run python benchmarks/multisession_soak.py \
   --token-file deploy/docker/secrets/token \
-  --wav-a /path/to/alpha-de.wav --sessions 1 --tool-turns \
-  --duration 1800 --output benchmarks/reports/one-session.raw.jsonl
-uv run python benchmarks/two_session_soak.py \
+  --wav /path/to/alpha-de.wav --sessions 1 --arrival staggered \
+  --workload mixed --duration 1800 \
+  --output benchmarks/reports/compat-s1-staggered-mixed.raw.jsonl
+uv run python benchmarks/multisession_soak.py \
   --token-file deploy/docker/secrets/token \
-  --wav-a /path/to/alpha-de.wav --wav-b /path/to/beta-de.wav \
-  --sessions 2 --tool-turns --duration 1800 \
-  --output benchmarks/reports/two-session.raw.jsonl
+  --wav /path/to/alpha-de.wav --wav /path/to/beta-de.wav \
+  --sessions 4 --arrival barrier --workload mixed --duration 1800 \
+  --output benchmarks/reports/compat-s4-barrier-mixed.raw.jsonl
 uv run python benchmarks/summarize.py benchmarks/reports/one-session.raw.jsonl \
   --gpu-csv benchmarks/reports/gpu-memory-one.csv
-uv run python benchmarks/summarize.py benchmarks/reports/two-session.raw.jsonl \
-  --gpu-csv benchmarks/reports/gpu-memory-two.csv
+uv run python benchmarks/summarize.py \
+  benchmarks/reports/compat-s4-barrier-mixed.raw.jsonl \
+  --gpu-csv benchmarks/reports/gpu-memory-four.csv
 ```
 
 The runner refuses to overwrite raw data. It records model revisions,
@@ -61,9 +80,11 @@ absolute paths outside the Actions checkout. Checkout cleanup therefore cannot r
 the large verified model cache or its generated lock; the workflow verifies both before
 starting Docker.
 
-The service Prometheus series provide STT/TTS queue and inference time, LLM TTFT and
-token rate, TTS TTFA and generated-audio duration, cancellations, stale drops, and
-runtime load counts. Preserve the raw Prometheus records with the client summary.
+The service Prometheus series provide STT/TTS queue and inference time, LLM TTFT,
+prompt evaluation, token rate and cache reuse where exposed, TTS TTFA and
+generated-audio duration, cancellations, stale drops, runtime load counts, busy
+slots, decode concurrency and worker activity. Preserve raw Prometheus records
+with the client summary.
 Derive TTS RTF from measured TTS generation seconds divided by measured generated
 audio seconds. Do not compare runs unless hardware, image digest, model revisions,
 quantization, audio inputs, and duration are all present.

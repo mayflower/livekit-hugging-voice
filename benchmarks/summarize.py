@@ -45,6 +45,43 @@ SERVICE_HISTOGRAMS = {
 }
 BUCKET_RE = re.compile(r'^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)_bucket\{le="(?P<le>[^"]+)"\}$')
 LOAD_RE = re.compile(r'^hugging_voice_model_loads_total\{model="(?P<model>[^"]+)"\}$')
+LLAMA_COUNTERS = (
+    "llamacpp:prompt_tokens_total",
+    "llamacpp:prompt_seconds_total",
+    "llamacpp:tokens_predicted_total",
+    "llamacpp:tokens_predicted_seconds_total",
+    "llamacpp:n_decode_total",
+)
+LLAMA_GAUGES = (
+    "llamacpp:prompt_tokens_seconds",
+    "llamacpp:predicted_tokens_seconds",
+    "llamacpp:requests_processing",
+    "llamacpp:requests_deferred",
+    "llamacpp:n_tokens_max",
+    "llamacpp:n_busy_slots_per_decode",
+)
+REQUIRED_PROVENANCE = {
+    "profile_id",
+    "configuration_fingerprint",
+    "session_concurrency",
+    "arrival_mode",
+    "workload",
+    "seed",
+    "gpu",
+    "cuda_runtime",
+    "git_commit",
+    "container_image_digest",
+    "service_models",
+    "wav_sha256",
+}
+CORRECTNESS_FLAGS = {
+    "cross_session_leak",
+    "stale_final_response",
+    "audio_before_tool_result",
+    "duplicate_tool_execution",
+    "unknown_or_mismatched_tool_result",
+    "non_finite_audio",
+}
 
 
 def percentile(values: list[float], quantile: float) -> float:
@@ -104,7 +141,7 @@ def summarize_prometheus(records: list[dict[str, Any]]) -> dict[str, Any]:
     after = snapshots.get("after", {})
     if not after:
         return {}
-    result: dict[str, Any] = {"histograms": {}, "model_loads": {}}
+    result: dict[str, Any] = {"histograms": {}, "model_loads": {}, "llama_cpp": {}}
     for name in sorted(SERVICE_HISTOGRAMS):
         count = after.get(f"{name}_count", 0.0) - before.get(f"{name}_count", 0.0)
         total = after.get(f"{name}_sum", 0.0) - before.get(f"{name}_sum", 0.0)
@@ -130,6 +167,12 @@ def summarize_prometheus(records: list[dict[str, Any]]) -> dict[str, Any]:
         match = LOAD_RE.match(key)
         if match is not None:
             result["model_loads"][match.group("model")] = int(value)
+    for name in LLAMA_COUNTERS:
+        if name in after:
+            result["llama_cpp"][name] = after[name] - before.get(name, 0.0)
+    for name in LLAMA_GAUGES:
+        if name in after:
+            result["llama_cpp"][name] = after[name]
     tts_duration = after.get("hugging_voice_tts_duration_seconds_sum", 0.0) - before.get(
         "hugging_voice_tts_duration_seconds_sum", 0.0
     )
@@ -174,21 +217,48 @@ def summarize_records(records: list[dict[str, Any]], source: Path) -> dict[str, 
     observations_by_concurrency: dict[int, dict[str, list[float]]] = defaultdict(
         lambda: defaultdict(list)
     )
+    observations_by_session: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    observations_by_turn_type: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    observations_by_profile: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
     errors: list[dict[str, Any]] = []
+    correctness_violations: list[str] = []
     turns = 0
     tool_turns = 0
     stale = 0
     cancelled = 0
     tool_errors = 0
+    reconnects = 0
+    turns_by_session: dict[str, int] = defaultdict(int)
+    slots_by_session: dict[str, set[int]] = defaultdict(set)
     default_concurrency = metadata.get("session_concurrency")
     for record in records:
         kind = record.get("record_type")
         if kind == "turn":
             turns += 1
-            if record.get("tool_call_emitted_at") is not None:
+            session_key = str(record.get("session_index", record.get("session_label", "unknown")))
+            turns_by_session[session_key] += 1
+            slot = record.get("llama_slot_id")
+            if isinstance(slot, int):
+                slots_by_session[str(record.get("session_id", session_key))].add(slot)
+            turn_type = str(record.get("turn_type", "unknown"))
+            profile_id = str(record.get("profile_id", metadata.get("profile_id", "unknown")))
+            if turn_type == "tool" or record.get("tool_call_emitted_at") is not None:
                 tool_turns += 1
             stale += int(record.get("stale_count", 0))
             cancelled += int(bool(record.get("cancelled", False)))
+            for flag in CORRECTNESS_FLAGS:
+                if bool(record.get(flag, False)):
+                    correctness_violations.append(f"{flag}:turn={record.get('turn_index')}")
+            if record.get("status") == "completed" and int(record.get("audio_chunk_count", 0)) <= 1:
+                correctness_violations.append(
+                    f"incomplete_audio:session={session_key}:turn={record.get('turn_index')}"
+                )
             metrics = record.get("metrics")
             if not isinstance(metrics, dict):
                 continue
@@ -202,9 +272,21 @@ def summarize_records(records: list[dict[str, Any]], source: Path) -> dict[str, 
                     concurrency = record.get("session_concurrency", default_concurrency)
                     if isinstance(concurrency, int) and 1 <= concurrency <= 64:
                         observations_by_concurrency[concurrency][name].append(float(value))
+                    observations_by_session[session_key][name].append(float(value))
+                    observations_by_turn_type[turn_type][name].append(float(value))
+                    observations_by_profile[profile_id][name].append(float(value))
         elif kind == "error":
             errors.append(record)
             tool_errors += int(bool(record.get("tool_call_error", False)))
+            correctness_violations.append(
+                f"error:{record.get('error_type', 'unknown')}:session={record.get('session_index')}"
+            )
+        elif kind == "reconnect":
+            reconnects += 1
+
+    for session_id, slots in slots_by_session.items():
+        if len(slots) > 1:
+            correctness_violations.append(f"slot_changed:session={session_id}")
 
     def metric_summary(
         source_observations: dict[str, list[float]],
@@ -222,9 +304,40 @@ def summarize_records(records: list[dict[str, Any]], source: Path) -> dict[str, 
         }
 
     successful_or_failed_tool_turns = tool_turns + tool_errors
+    run_complete = next(
+        (record for record in records if record.get("record_type") == "run_complete"), {}
+    )
+    duration = run_complete.get(
+        "actual_duration_seconds", metadata.get("requested_duration_seconds")
+    )
+    duration_seconds = (
+        float(duration)
+        if isinstance(duration, int | float) and math.isfinite(duration) and duration > 0
+        else None
+    )
+    per_session_metrics = {
+        session: metric_summary(grouped)
+        for session, grouped in sorted(observations_by_session.items())
+    }
+    fairness_metric = "speech_stop_to_first_audio_frame_seconds"
+    session_p95 = [
+        metrics[fairness_metric]["p95"]
+        for metrics in per_session_metrics.values()
+        if fairness_metric in metrics
+    ]
+    fairness_ratio = (
+        max(session_p95) / percentile(session_p95, 0.50)
+        if session_p95 and percentile(session_p95, 0.50) > 0
+        else None
+    )
+    missing_provenance = sorted(
+        key
+        for key in REQUIRED_PROVENANCE
+        if metadata.get(key) is None or metadata.get(key) == "" or metadata.get(key) == []
+    )
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": datetime.now(UTC).isoformat(),
         "source": str(source),
         "metadata": metadata,
@@ -237,12 +350,37 @@ def summarize_records(records: list[dict[str, Any]], source: Path) -> dict[str, 
         ),
         "stale": stale,
         "cancelled": cancelled,
+        "reconnects": reconnects,
         "errors": len(errors),
         "ooms": sum("oom" in str(error).lower() for error in errors),
+        "duration_seconds": duration_seconds,
+        "turns_per_minute": (
+            turns * 60.0 / duration_seconds if duration_seconds is not None else None
+        ),
+        "turns_by_session": dict(sorted(turns_by_session.items())),
+        "cancel_rate": cancelled / turns if turns else None,
+        "reconnect_rate": reconnects / turns if turns else None,
+        "correctness_violations": sorted(set(correctness_violations)),
+        "correctness_passed": not correctness_violations,
+        "provenance_complete": not missing_provenance,
+        "missing_provenance": missing_provenance,
+        "fairness": {
+            "metric": fairness_metric,
+            "slowest_to_median_p95_ratio": fairness_ratio,
+        },
         "metrics": metric_summary(observations),
         "metrics_by_session_concurrency": {
             str(concurrency): metric_summary(grouped)
             for concurrency, grouped in sorted(observations_by_concurrency.items())
+        },
+        "metrics_by_session": per_session_metrics,
+        "metrics_by_turn_type": {
+            turn_type: metric_summary(grouped)
+            for turn_type, grouped in sorted(observations_by_turn_type.items())
+        },
+        "metrics_by_profile": {
+            profile: metric_summary(grouped)
+            for profile, grouped in sorted(observations_by_profile.items())
         },
         "service_metrics": summarize_prometheus(records),
     }
@@ -257,6 +395,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"Raw source: `{report['source']}`  ",
         f"Measured turns: **{report['turns']}**  ",
         f"Errors: **{report['errors']}**; OOMs: **{report['ooms']}**",
+        f"Correctness gates: **{'PASS' if report['correctness_passed'] else 'FAIL'}**  ",
+        f"Provenance: **{'complete' if report['provenance_complete'] else 'incomplete'}**  ",
+        "Turns/minute: **"
+        f"{report['turns_per_minute'] if report['turns_per_minute'] is not None else 'unknown'}"
+        "**",
         "",
         "## Provenance",
         "",
@@ -270,6 +413,24 @@ def render_markdown(report: dict[str, Any]) -> str:
         lines.append(
             "No provenance metadata was present; this run is incomplete and not release evidence."
         )
+    if report["missing_provenance"]:
+        lines.append("")
+        lines.append(
+            "Missing required provenance: "
+            + ", ".join(f"`{field}`" for field in report["missing_provenance"])
+        )
+
+    lines.extend(["", "## Correctness and fairness", ""])
+    if report["correctness_violations"]:
+        lines.extend(f"- `{violation}`" for violation in report["correctness_violations"])
+    else:
+        lines.append("No correctness violation was recorded.")
+    lines.append("")
+    lines.append(
+        "Slowest/median per-session p95 ratio for "
+        f"`{report['fairness']['metric']}`: "
+        f"`{report['fairness']['slowest_to_median_p95_ratio']}`"
+    )
 
     lines.extend(["", "## Measurements", ""])
     metrics = report["metrics"]
@@ -305,6 +466,30 @@ def render_markdown(report: dict[str, Any]) -> str:
                 ]
             )
             for name, values in concurrency_metrics.items():
+                lines.append(
+                    f"| `{name}` | {values['count']} | {values['p50']:.4f} | "
+                    f"{values['p95']:.4f} | {values['p99']:.4f} |"
+                )
+            lines.append("")
+    for title, key in (
+        ("Measurements by session", "metrics_by_session"),
+        ("Measurements by turn type", "metrics_by_turn_type"),
+        ("Measurements by profile", "metrics_by_profile"),
+    ):
+        groups = report.get(key, {})
+        if not groups:
+            continue
+        lines.extend(["", f"## {title}", ""])
+        for group, group_metrics in groups.items():
+            lines.extend(
+                [
+                    f"### {group}",
+                    "",
+                    "| Metric | n | p50 | p95 | p99 |",
+                    "|---|---:|---:|---:|---:|",
+                ]
+            )
+            for name, values in group_metrics.items():
                 lines.append(
                     f"| `{name}` | {values['count']} | {values['p50']:.4f} | "
                     f"{values['p95']:.4f} | {values['p99']:.4f} |"
@@ -358,7 +543,7 @@ def main() -> int:
     markdown_path.write_text(render_markdown(report), encoding="utf-8")
     print(json_path)
     print(markdown_path)
-    return 0
+    return 0 if report["correctness_passed"] else 2
 
 
 if __name__ == "__main__":

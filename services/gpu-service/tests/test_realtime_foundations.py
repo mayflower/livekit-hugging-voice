@@ -88,7 +88,11 @@ def test_audio_buffer_tracks_absolute_samples_and_rejects_overflow() -> None:
 
 
 def test_german_text_segmenter_preserves_abbreviations_and_bounds_segments() -> None:
-    segmenter = SpeechTextSegmenter(max_characters=80)
+    segmenter = SpeechTextSegmenter(
+        first_segment_characters=80,
+        next_segment_characters=80,
+        hard_max_characters=80,
+    )
     assert segmenter.feed("Ein vollständiger Satz.") == ["Ein vollständiger Satz."]
     assert segmenter.feed("Dr. Müller misst 3.14 Meter. Danach geht es weiter. ") == [
         "Dr. Müller misst 3.14 Meter.",
@@ -98,6 +102,47 @@ def test_german_text_segmenter_preserves_abbreviations_and_bounds_segments() -> 
     segments = segmenter.feed(long) + segmenter.flush()
     assert " ".join(segments) == long.strip()
     assert all(len(segment) <= 80 for segment in segments)
+
+
+@pytest.mark.parametrize(
+    ("text", "protected"),
+    [
+        ("Dr. Müller nennt 3.14 Meter. Danach folgt Deutsch.", "3.14 Meter."),
+        ("Mr. Smith measures 3.14 metres. English follows.", "3.14 metres."),
+        ("Mme. Dupont mesure 3.14 mètres. Le français suit.", "3.14 mètres."),
+        ("Il sig. Rossi misura 3.14 metri. Segue l'italiano.", "3.14 metri."),
+    ],
+)
+def test_multilingual_segmentation_protects_abbreviations_and_decimals(
+    text: str,
+    protected: str,
+) -> None:
+    segmenter = SpeechTextSegmenter(
+        first_segment_characters=48,
+        next_segment_characters=80,
+        hard_max_characters=96,
+    )
+    segments = segmenter.feed(text) + segmenter.flush()
+    assert " ".join(segments) == text
+    assert any(protected in segment for segment in segments)
+    assert all(segment and len(segment) <= 96 for segment in segments)
+
+
+def test_segmenter_uses_a_shorter_first_segment_without_splitting_words() -> None:
+    text = (
+        "This opening contains enough words to cross the deliberately short first boundary "
+        "and then continues with a substantially longer second section for synthesis."
+    )
+    segmenter = SpeechTextSegmenter(
+        first_segment_characters=48,
+        next_segment_characters=80,
+        hard_max_characters=96,
+    )
+    segments = segmenter.feed(text) + segmenter.flush()
+    assert len(segments[0]) <= 48
+    assert len(segments[1]) > len(segments[0])
+    assert " ".join(segments) == text
+    assert all(len(segment) <= 96 for segment in segments)
 
 
 def test_tool_exchange_is_committed_and_trimmed_atomically() -> None:

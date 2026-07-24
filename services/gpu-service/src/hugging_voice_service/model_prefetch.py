@@ -63,7 +63,7 @@ def prefetch_models(
             )
         )
 
-    lock = ModelLock(models=tuple(locked_models))
+    lock = ModelLock(profile_id=manifest.profile_id, models=tuple(locked_models))
     _atomic_write(lock_path, render_lock(lock))
     return lock
 

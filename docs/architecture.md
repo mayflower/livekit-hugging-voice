@@ -9,8 +9,9 @@ hop.
 
 One GPU-service pod contains one Python ASGI process and one loopback-bound
 `llama-server` child managed by that Python process. The pod loads one shared
-Parakeet runtime, one shared Qwen runtime, and one Gemma 4 31B model in llama.cpp
-with a bounded operator-configured number of sequence slots. Each admitted session
+Parakeet runtime, one selected llama.cpp chat model, and a bounded pool of one or
+two selected Qwen runtimes in production, with a bounded operator-configured
+number of sequence slots. Each admitted session
 owns its VAD, audio remainder, conversation, IDs, cancellation generation,
 lifecycle, transport, and one stable llama.cpp slot.
 
@@ -26,7 +27,11 @@ The Gemma readiness probe is two-step: the pinned stack must emit a structured
 second generation. This probe is not a production tool executor.
 
 Gemma requests prepend the operator-configured speech system prompt and the selected
-language's response instruction, cap output at 256 tokens, and pass
+language's response instruction. Operator-only limits cap tool decisions at 96
+tokens and normal/final voice replies at 128 tokens. Each connection asynchronously
+prefills its stable prefix into its fixed slot with `cache_prompt=true`; its first
+response reuses and, if necessary, waits for that same local future. No cache is
+persisted or shared between connections. Requests pass
 `chat_template_kwargs.enable_thinking=false`. Reasoning fields are suppressed, and
 a defensive streaming filter quarantines a leading thinking block rather than
 exposing it to later TTS stages.
@@ -46,9 +51,12 @@ Both generations retain the session's fixed llama.cpp slot and prompt cache.
 
 WebSocket authentication and exact subprotocol validation happen before atomic
 slot claim. Each connection has bounded inbound and outbound queues and one
-serialized sender. Final STT runs before partial STT; both STT classes and TTS
-segments are round-robin across sessions. Only opportunistic partial transcription
-may be dropped. Session release cancels the active generation, drains shared-worker
+serialized sender. Final STT runs before partial STT. Partial STT is disabled by
+default; when enabled, one droppable job per session sees only a bounded trailing
+audio window. The first TTS text segment uses a shorter target than later segments,
+with sentence/word boundaries and a strict hard cap. STT classes and TTS segments
+are round-robin across sessions. Session release cancels the active generation,
+drains shared-worker
 work for that session, clears VAD/audio/conversation state, and only then returns a
 slot to `idle`.
 

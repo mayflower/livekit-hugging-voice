@@ -13,16 +13,22 @@ import pytest
 REPO_ROOT = Path(__file__).parents[3]
 
 
-def assert_single_shared_model_loads(records: list[dict[str, object]]) -> None:
+def assert_bounded_model_loads(records: list[dict[str, object]]) -> None:
     after = next(
         record
         for record in records
         if record.get("record_type") == "prometheus" and record.get("phase") == "after"
     )
     metrics = cast(str, after["text"])
-    for model in ("gemma", "parakeet", "qwen_tts"):
+    for model in ("gemma", "parakeet"):
         pattern = rf'^hugging_voice_model_loads_total\{{model="{model}"\}} 1(?:\.0)?$'
         assert re.search(pattern, metrics, re.MULTILINE), model
+    tts_workers = int(os.environ.get("HV_EXPECTED_TTS_WORKERS", "1"))
+    assert re.search(
+        rf'^hugging_voice_model_loads_total\{{model="qwen_tts"\}} {tts_workers}(?:\.0)?$',
+        metrics,
+        re.MULTILINE,
+    )
 
 
 def external_assets() -> tuple[Path, Path, Path]:
@@ -58,15 +64,21 @@ async def invoke_soak(
     output = tmp_path / "raw.jsonl"
     process = await asyncio.create_subprocess_exec(
         sys.executable,
-        str(REPO_ROOT / "benchmarks" / "two_session_soak.py"),
+        str(REPO_ROOT / "benchmarks" / "multisession_soak.py"),
         "--service-url",
         os.environ.get("HV_GPU_SERVICE_URL", "http://127.0.0.1:8765"),
         "--token-file",
         str(token),
-        "--wav-a",
+        "--wav",
         str(wav_a),
-        "--wav-b",
+        "--wav",
         str(wav_b),
+        "--sessions",
+        "2",
+        "--arrival",
+        "barrier",
+        "--workload",
+        "mixed",
         "--duration",
         str(duration),
         "--cancel-every",
@@ -87,10 +99,10 @@ async def invoke_soak(
 @pytest.mark.gpu
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_external_two_session_e2e(tmp_path: Path) -> None:
+async def test_external_multisession_e2e(tmp_path: Path) -> None:
     records = await invoke_soak(tmp_path, duration=0.01)
     turns = [record for record in records if record["record_type"] == "turn"]
-    assert {record["session_label"] for record in turns} == {"alpha", "beta"}
+    assert {record["session_label"] for record in turns} == {"session-00", "session-01"}
     assert len({record["session_id"] for record in turns}) == 2
     assert all(cast(int, record["transcript_chars"]) > 0 for record in turns)
     assert all(cast(int, record["response_chars"]) > 0 for record in turns)
@@ -99,17 +111,17 @@ async def test_external_two_session_e2e(tmp_path: Path) -> None:
         for record in turns
     )
     assert all(record["cross_session_leak"] is False for record in turns)
-    assert {record["isolation_canary"] for record in turns} == {"ALPHAEINS", "BETAZWEI"}
+    assert len({record["isolation_canary"] for record in turns}) == 2
     assert not [record for record in records if record["record_type"] == "error"]
-    assert_single_shared_model_loads(records)
+    assert_bounded_model_loads(records)
 
 
 @pytest.mark.gpu
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_external_two_session_soak(tmp_path: Path) -> None:
+async def test_external_multisession_soak(tmp_path: Path) -> None:
     if os.environ.get("HV_RUN_GPU_SOAK") != "1":
-        pytest.skip("set HV_RUN_GPU_SOAK=1 for the 30-minute two-session soak")
+        pytest.skip("set HV_RUN_GPU_SOAK=1 for the 30-minute multi-session soak")
     records = await invoke_soak(
         tmp_path,
         duration=1_800.0,
@@ -117,7 +129,7 @@ async def test_external_two_session_soak(tmp_path: Path) -> None:
         reconnect_every=11,
     )
     turns = [record for record in records if record["record_type"] == "turn"]
-    assert {record["session_label"] for record in turns} == {"alpha", "beta"}
+    assert {record["session_label"] for record in turns} == {"session-00", "session-01"}
     assert all(record["cross_session_leak"] is False for record in turns)
     assert not [record for record in records if record["record_type"] == "error"]
-    assert_single_shared_model_loads(records)
+    assert_bounded_model_loads(records)

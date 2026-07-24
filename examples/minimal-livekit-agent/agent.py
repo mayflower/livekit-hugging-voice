@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Mapping
@@ -93,6 +94,30 @@ async def count_characters(context: RunContext[DemoContext], text: str) -> str:
     return result
 
 
+@function_tool
+async def check_service_status(context: RunContext[DemoContext], service: str) -> str:
+    """Perform a deliberately slow demo status check for a named service."""
+
+    bounded_service = service.strip()[:100]
+    if not bounded_service:
+        raise ValueError("service must not be empty")
+    await _publish_tool_event(
+        context,
+        status="running",
+        arguments={"service": bounded_service},
+    )
+    context.session.say("Ich prüfe das kurz.")
+    await asyncio.sleep(1.0)
+    result = f"{bounded_service}: operational"
+    await _publish_tool_event(
+        context,
+        status="completed",
+        arguments={"service": bounded_service},
+        result=result,
+    )
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class SpeechOptions:
     language: str | None
@@ -141,10 +166,11 @@ async def entrypoint(ctx: JobContext) -> None:
         agent=Agent(
             instructions=os.getenv(
                 "HUGGING_VOICE_AGENT_INSTRUCTIONS",
-                "Use add_numbers for additions and count_characters when asked for "
-                "the length of a text. Answer briefly in German. Do not use Markdown.",
+                "Use add_numbers for additions, count_characters for text lengths, and "
+                "check_service_status for status checks. Answer briefly in German. "
+                "Do not use Markdown.",
             ),
-            tools=[add_numbers, count_characters],
+            tools=[add_numbers, count_characters, check_service_status],
         ),
     )
 

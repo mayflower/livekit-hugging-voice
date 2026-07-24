@@ -29,8 +29,12 @@ SHA-256 from the local artifact, builds a complete lock in memory, fsyncs a temp
 file, and atomically replaces the destination lock only after every entry succeeds.
 A failed or partial download therefore cannot publish a successful lock.
 
-The real lock is not present in this Wave 1 checkout because the full model set was
-not downloaded. No placeholder sizes or hashes are supplied.
+Reviewed complete delivery locks under `models/profiles/` record exact artifact
+sizes and SHA-256 values. The root `manifest.lock.json` remains the ignored
+operator-generated active lock because an existing checkout may hold a legacy
+prefetch. Every manifest and lock carries one bounded `profile_id`; startup
+requires an exact match with the selected service configuration before hashing
+or loading a model. Component audit locks are not silently combined at runtime.
 
 ## Offline verification
 
@@ -46,12 +50,18 @@ sizes, hash mismatches, unsafe paths, missing Silero installation, or a Silero
 version other than 6.2.1. Wave 2 makes this verification a startup prerequisite
 before any model constructor runs.
 
-Neither runtime calls a `from_pretrained` Hub resolver: Parakeet's checkpoint is
-opened directly and Qwen uses `GGMLQwen3TTS.from_gguf` with both verified paths.
-`HF_HUB_OFFLINE=1` and
+Parakeet's checkpoint is opened directly. Compatibility Qwen uses
+`GGMLQwen3TTS.from_gguf` with verified files; the CUDA candidate calls
+`FasterQwen3TTS.from_pretrained` only with the verified local model directory
+while both offline flags are already set. `HF_HUB_OFFLINE=1` and
 `TRANSFORMERS_OFFLINE=1` remain mandatory at runtime.
 
 Model weights remain outside Git and outside the service image. Docker mounts the
 verified directory read-only; Kubernetes uses the same prefetch CLI in an explicit
 network-enabled job and mounts the resulting PVC read-only into offline service
 pods.
+
+Version 0.3 candidate sources and hashes are recorded in
+`docs/performance/llm-candidate-artifacts.md`. Selecting a candidate requires a
+complete profile lock containing that LLM, Parakeet, the selected TTS artifacts,
+and pinned Python packages.

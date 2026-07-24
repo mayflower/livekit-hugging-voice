@@ -1,0 +1,114 @@
+{
+  "profile_id": "multisession_qwen_a3b_qwen06_cuda",
+  "models": [
+    {
+      "delivery": "huggingface",
+      "files": [
+        {
+          "path": "Qwen_Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+          "sha256": "382b4f5a164d200f93790ee0e339fae12852896d23485cfb203ce868fea33a95",
+          "size": 18632183808
+        }
+      ],
+      "id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "license": "Apache-2.0",
+      "revision": "6c6e8692f43e4ca663f7ece8229a1361090d3a4c",
+      "source_repo": "bartowski/Qwen_Qwen3-30B-A3B-Instruct-2507-GGUF"
+    },
+    {
+      "delivery": "huggingface",
+      "files": [
+        {
+          "path": "parakeet-tdt-0.6b-v3.nemo",
+          "sha256": "3cbdc85877e668ca7b82d0d56770eb1fac76691f55d6b97545e8d61ca588d10d",
+          "size": 2509332480
+        }
+      ],
+      "id": "nvidia/parakeet-tdt-0.6b-v3",
+      "license": "CC-BY-4.0",
+      "revision": "7c35754d166cca382ad1e53e68b01e7c575f3a1d",
+      "source_repo": "nvidia/parakeet-tdt-0.6b-v3"
+    },
+    {
+      "delivery": "huggingface",
+      "files": [
+        {
+          "path": "config.json",
+          "sha256": "2e714c787c8edb98b05432685cddb634add2de4d4e645f653d68251ef72ba011",
+          "size": 4494
+        },
+        {
+          "path": "generation_config.json",
+          "sha256": "f1b90b4513f3b34c62851049e2492d7b4c5940daf1276f89c82b8ef04127f3aa",
+          "size": 245
+        },
+        {
+          "path": "merges.txt",
+          "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+          "size": 1671839
+        },
+        {
+          "path": "model.safetensors",
+          "sha256": "180b3b10eb1c9f1b4db7806d5475bae3071c0243c299d49926bab1da3b6946f6",
+          "size": 1829344272
+        },
+        {
+          "path": "preprocessor_config.json",
+          "sha256": "efdde1022ea9d76928bf7a9cd53139138f5ba2e466e837f08f6105ab1af1c119",
+          "size": 127
+        },
+        {
+          "path": "speech_tokenizer/config.json",
+          "sha256": "ee65bb901c876664ab8707c487157aa1a6ee57c65969b28fb5ec9dc211e68167",
+          "size": 2336
+        },
+        {
+          "path": "speech_tokenizer/configuration.json",
+          "sha256": "6bc26d64eb5024b4d1dab5a52371958b429256d6c9d59787f1f5294a54e0cebd",
+          "size": 76
+        },
+        {
+          "path": "speech_tokenizer/model.safetensors",
+          "sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258",
+          "size": 682293092
+        },
+        {
+          "path": "speech_tokenizer/preprocessor_config.json",
+          "sha256": "fcb3805e597e786d4067706e602f6688524640f8d3396790e2e09b5942fcbdfb",
+          "size": 234
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sha256": "dc3c31c3bdaedd5016382bb3cbe07323026775ad51f5a4fb564505992ae4a670",
+          "size": 7344
+        },
+        {
+          "path": "vocab.json",
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+          "size": 2776833
+        }
+      ],
+      "id": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+      "license": "Apache-2.0",
+      "revision": "5d83992436eae1d760afd27aff78a71d676296fc",
+      "source_repo": "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
+    },
+    {
+      "delivery": "python-package",
+      "files": [],
+      "id": "faster-qwen3-tts",
+      "license": "MIT",
+      "revision": "0.3.2",
+      "source_repo": "pypi:faster-qwen3-tts"
+    },
+    {
+      "delivery": "python-package",
+      "files": [],
+      "id": "silero-vad",
+      "license": "MIT",
+      "revision": "6.2.1",
+      "source_repo": "pypi:silero-vad"
+    }
+  ],
+  "schema_version": 1
+}

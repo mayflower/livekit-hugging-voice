@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       run_soak:
-        description: Run the 30-minute two-session soak
+        description: Run the 30-minute multi-session soak
         required: true
         default: false
         type: boolean
@@ -55,14 +55,14 @@ jobs:
           docker compose -f deploy/docker/compose.yaml build
           docker compose -f deploy/docker/compose.yaml up -d
           timeout 900 bash -c 'until curl --fail --silent http://127.0.0.1:8765/health/ready >/dev/null; do sleep 5; done'
-      - name: Run external AgentSession and two-session E2E
+      - name: Run external AgentSession and multi-session E2E
         env:
           HV_GPU_TOKEN_FILE: deploy/docker/secrets/token
           HV_GPU_WAV_A: ${{ vars.HV_GPU_WAV_A }}
           HV_GPU_WAV_B: ${{ vars.HV_GPU_WAV_B }}
         run: >-
           uv run pytest -q -m gpu
-          -k 'external_agent_session or external_two_session_e2e'
+          -k 'external_agent_session or external_multisession_e2e'
       - name: Run explicit soak
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_soak) || github.event_name == 'schedule' }}
         env:
@@ -70,7 +70,7 @@ jobs:
           HV_GPU_TOKEN_FILE: deploy/docker/secrets/token
           HV_GPU_WAV_A: ${{ vars.HV_GPU_WAV_A }}
           HV_GPU_WAV_B: ${{ vars.HV_GPU_WAV_B }}
-        run: uv run pytest -q -m gpu -k external_two_session_soak
+        run: uv run pytest -q -m gpu -k external_multisession_soak
       - name: Stop service
         if: always()
         run: docker compose -f deploy/docker/compose.yaml down

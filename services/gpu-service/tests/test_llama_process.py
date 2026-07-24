@@ -1,12 +1,27 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import stat
 import sys
 from pathlib import Path
 
 import pytest
 from hugging_voice_service.llama_process import LlamaProcess, LlamaProcessError, LlamaProcessState
+
+
+@pytest.mark.asyncio
+async def test_child_logs_are_redacted(caplog: pytest.LogCaptureFixture, tmp_path: Path) -> None:
+    process = LlamaProcess(binary=tmp_path / "llama", model=tmp_path / "model")
+    stream = asyncio.StreamReader()
+    stream.feed_data(b"secret conversation and tool output\n")
+    stream.feed_eof()
+    with caplog.at_level(logging.INFO):
+        await process._forward_logs(stream, logging.INFO)
+    record = caplog.records[-1]
+    assert record.__dict__["child_message"] == "<redacted>"
+    assert record.__dict__["child_message_bytes"] == 36
+    assert "secret conversation" not in caplog.text
 
 
 def write_llama_stub(tmp_path: Path, *, mode: str = "ready") -> tuple[Path, Path]:
@@ -87,6 +102,14 @@ def test_llama_command_is_loopback_local_file_two_slots_and_no_hub(tmp_path: Pat
     assert command[command.index("--host") + 1] == "127.0.0.1"
     assert command[command.index("--parallel") + 1] == "2"
     assert command[command.index("--ctx-size") + 1] == "32768"
+    assert command[command.index("--flash-attn") + 1] == "auto"
+    assert command[command.index("--batch-size") + 1] == "2048"
+    assert command[command.index("--ubatch-size") + 1] == "512"
+    assert command[command.index("--cache-type-k") + 1] == "f16"
+    assert command[command.index("--cache-type-v") + 1] == "f16"
+    assert command[command.index("--cache-reuse") + 1] == "0"
+    assert "--cont-batching" in command
+    assert "--metrics" in command
     assert command[command.index("--n-gpu-layers") + 1] == "all"
     assert "-hf" not in command
     assert "--hf-repo" not in command
@@ -111,6 +134,19 @@ def test_llama_accepts_configured_slots_and_rejects_unsafe_capacity(tmp_path: Pa
             model=tmp_path / "model",
             parallel_slots=20,
             context_size=32_768,
+        )
+    with pytest.raises(ValueError, match="batch sizes"):
+        LlamaProcess(
+            binary=tmp_path / "server",
+            model=tmp_path / "model",
+            batch_size=256,
+            ubatch_size=512,
+        )
+    with pytest.raises(ValueError, match="KV cache"):
+        LlamaProcess(
+            binary=tmp_path / "server",
+            model=tmp_path / "model",
+            cache_type_k="q4_0",
         )
 
 

@@ -14,5 +14,6 @@ coverage.xml
 models/manifest.lock.json
 benchmarks/reports/*
 !benchmarks/reports/.gitkeep
+!benchmarks/reports/model-selection.json
 deploy/docker/secrets/*
 !deploy/docker/secrets/.gitkeep

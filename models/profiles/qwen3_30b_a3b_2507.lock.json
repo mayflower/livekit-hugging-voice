@@ -1,0 +1,20 @@
+{
+  "profile_id": "qwen3_30b_a3b_2507",
+  "models": [
+    {
+      "delivery": "huggingface",
+      "files": [
+        {
+          "path": "Qwen_Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
+          "sha256": "382b4f5a164d200f93790ee0e339fae12852896d23485cfb203ce868fea33a95",
+          "size": 18632183808
+        }
+      ],
+      "id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "license": "Apache-2.0",
+      "revision": "6c6e8692f43e4ca663f7ece8229a1361090d3a4c",
+      "source_repo": "bartowski/Qwen_Qwen3-30B-A3B-Instruct-2507-GGUF"
+    }
+  ],
+  "schema_version": 1
+}
