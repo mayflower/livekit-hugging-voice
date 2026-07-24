@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator, Iterator
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, cast
 
@@ -334,6 +335,7 @@ async def test_qwen_cuda_graph_prepares_all_references_and_reuses_prompts(
         _cuda_model_dir(tmp_path),
         model_factory=lambda path: model,
         cuda_probe=lambda: None,
+        inference_context_factory=lambda: nullcontext(),
         voice_references=(
             ("German", first, "Erste Referenz."),
             ("Italian", second, "Secondo riferimento."),
@@ -375,6 +377,7 @@ async def test_qwen_cuda_graph_closes_generator_on_cancellation_and_rejects_nonf
         _cuda_model_dir(tmp_path),
         model_factory=lambda path: model,
         cuda_probe=lambda: None,
+        inference_context_factory=lambda: nullcontext(),
         voice_references=(("French", reference, "Une référence."),),
     )
     runtime.load()

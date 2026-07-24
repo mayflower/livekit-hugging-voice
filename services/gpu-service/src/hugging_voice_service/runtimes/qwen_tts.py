@@ -349,6 +349,7 @@ class QwenCudaGraphTTSRuntime:
         *,
         model_factory: CudaGraphQwenFactory = _load_local_cuda_graph_model,
         cuda_probe: Callable[[], None] = _require_cuda,
+        inference_context_factory: Callable[[], AbstractContextManager[Any]] = _inference_mode,
         voice_references: tuple[VoiceReference, ...],
         chunk_size: Literal[2, 4, 6, 8, 12] = 4,
         do_sample: bool = True,
@@ -362,6 +363,7 @@ class QwenCudaGraphTTSRuntime:
         self._model_dir = model_dir
         self._model_factory = model_factory
         self._cuda_probe = cuda_probe
+        self._inference_context_factory = inference_context_factory
         self._voice_references = voice_references
         self._chunk_size = chunk_size
         self._do_sample = do_sample
@@ -389,13 +391,13 @@ class QwenCudaGraphTTSRuntime:
         for _language, recording, _text in self._voice_references:
             if not recording.is_file():
                 raise FileNotFoundError(f"missing voice reference recording: {recording}")
-        with _inference_mode():
+        with self._inference_context_factory():
             self._model = self._model_factory(self._model_dir)
         self.load_count += 1
 
     def warmup(self) -> None:
         model = self._require_model()
-        with _inference_mode():
+        with self._inference_context_factory():
             model.warmup(prefill_len=100)
             for _language, recording, transcript in self._voice_references:
                 key = (recording, transcript)
@@ -438,7 +440,7 @@ class QwenCudaGraphTTSRuntime:
         if prompt is None:
             raise RuntimeError("voice reference was not prepared during startup")
         model = self._require_model()
-        with _inference_mode():
+        with self._inference_context_factory():
             iterator = model.generate_voice_clone_streaming(
                 text=text,
                 language=language,
@@ -495,19 +497,18 @@ class QwenCudaGraphTTSRuntime:
             raise RuntimeError("Qwen3-TTS CUDA runtime is not loaded")
         return self._model
 
-    @staticmethod
-    def _next_inference_item(iterator: Iterator[Any]) -> tuple[bool, Any | None]:
-        with _inference_mode():
+    def _next_inference_item(self, iterator: Iterator[Any]) -> tuple[bool, Any | None]:
+        with self._inference_context_factory():
             return _next_item(iterator)
 
-    @staticmethod
     def _pull_first_chunk(
+        self,
         iterator: Iterator[tuple[Any, int, dict[str, Any]]],
         *,
         detail: str,
     ) -> None:
         try:
-            with _inference_mode():
+            with self._inference_context_factory():
                 try:
                     chunk, sample_rate, _timing = next(iterator)
                 except StopIteration as exc:
