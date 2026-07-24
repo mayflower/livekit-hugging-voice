@@ -1,14 +1,9 @@
 # Repository instructions — version 0.2
 
-These instructions are normative for every change in this repository. Read
-`prompts.md` before implementing a wave. Wave 0 records the pinned upstream
-baseline once in `docs/upstream-baseline.md`; later waves inspect only files
-relevant to their concrete change and do not repeat a general upstream survey.
-For the native tool-calling work, also read `prompt.md`. The no-tool boundaries
-and the no-voice-cloning boundary in the historical version-0.1 `prompts.md` are
-superseded by this file (tool calling by `prompt.md`, voice cloning by the
-operator-defined `voice_clone` form described below); all other architecture and
-delivery constraints remain in force.
+These instructions are normative for every change in this repository. Wave 0
+records the pinned upstream baseline once in `docs/upstream-baseline.md`; later
+changes inspect only files relevant to their concrete scope and do not repeat a
+general upstream survey.
 
 ## Product boundary
 
@@ -127,8 +122,10 @@ Parakeet TDT 0.6B v3 -> local Gemma 4 31B IT in llama.cpp -> shared Qwen3-TTS
   output to the GPU service and waits for its ACK before `update_chat_ctx()` may
   succeed or a final reply may start. `auto_tool_reply_generation` remains false.
 - Tool schemas, arguments, outputs, pending ACKs, pending calls, queues, and wire
-  messages are strictly bounded as specified in `prompt.md`. JSON is canonical,
-  finite, and object-valued where required.
+  messages are strictly bounded by the protocol constants and configuration.
+  Current protocol maxima are 32 tools, 16 KiB per schema, 64 KiB across schemas,
+  16,000 characters for arguments, 16,000 characters for output, and one pending
+  tool call. JSON is canonical, finite, and object-valued where required.
 - Tool arguments, tool outputs, credentials, audio, and conversation content are
   never logged. External tool output is untrusted data, never a system
   instruction, and cannot replace the fixed system or voice rules.

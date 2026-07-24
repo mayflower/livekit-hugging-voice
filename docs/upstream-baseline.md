@@ -11,8 +11,8 @@ upstream survey.
 | Hugging Face `speech-to-speech` | `c766ba1edf0023fba514571a4c1b4e05e344929f` | `0.2.11` |
 | LiveKit `agents` | `c67c44e607f1fe60bfa312853c9f8c91235d5015` | `1.6.6` |
 
-The files enumerated in `prompts.md` were inspected from detached checkouts at
-those exact commits. No moving branch was used as evidence.
+The relevant upstream implementation files were inspected from detached checkouts
+at those exact commits. No moving branch was used as evidence.
 
 ## Hugging Face speech-to-speech findings
 
