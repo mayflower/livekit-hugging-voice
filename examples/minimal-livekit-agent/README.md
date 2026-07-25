@@ -17,6 +17,9 @@ while the user is still speaking; the final transcript replaces it without
 creating a duplicate message. Assistant text is published independently of audio
 playout and the browser consumes its stream incrementally, so generated text
 appears before the corresponding spoken sentence has finished.
+The central orb uses browser-side RMS meters for both the published microphone
+track and subscribed agent audio tracks, so its glow follows actual input and
+output loudness rather than only LiveKit's binary active-speaker state.
 
 Copy `.env.example`, provide the LiveKit credentials plus the internal service
 token, start LiveKit and the GPU service, then run:

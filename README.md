@@ -9,7 +9,13 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 `livekit-hugging-voice` is a local, GPU-hosted multilingual speech-to-speech service and
-a native LiveKit Agents realtime-model plugin. The intended path is:
+a native LiveKit Agents realtime-model plugin.
+
+The project was inspired by Hugging Face M4's
+[`hugging-voice`](https://huggingface.co/spaces/HuggingFaceM4/hugging-voice)
+Space. That inspiration is also the reason for the name `livekit-hugging-voice`.
+
+The intended path is:
 
 ```text
 LiveKit Agent

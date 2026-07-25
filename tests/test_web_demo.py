@@ -101,6 +101,12 @@ async def test_web_app_serves_ui_and_rejects_cross_origin_token_requests() -> No
         assert "for await (const chunk of reader)" in html
         assert "text += chunk" in html
         assert "reader.readAll()" not in html
+        assert "createAnalyser()" in html
+        assert "getByteTimeDomainData" in html
+        assert "inputMeter" in html
+        assert "outputMeters" in html
+        assert "requestAnimationFrame(updateOrbFromLevels)" in html
+        assert "stopLevelMeters" in html
         assert "RoomEvent.DataReceived" in html
         assert "hugging_voice.tool_call" in html
         assert "add_numbers · count_characters" in html
