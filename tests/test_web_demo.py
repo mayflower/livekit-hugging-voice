@@ -96,6 +96,11 @@ async def test_web_app_serves_ui_and_rejects_cross_origin_token_requests() -> No
         assert index.status == 200
         assert "setMicrophoneEnabled" in html
         assert "lk.transcription" in html
+        assert "lk.transcription_final" in html
+        assert "upsertTranscript" in html
+        assert "for await (const chunk of reader)" in html
+        assert "text += chunk" in html
+        assert "reader.readAll()" not in html
         assert "RoomEvent.DataReceived" in html
         assert "hugging_voice.tool_call" in html
         assert "add_numbers · count_characters" in html
@@ -158,6 +163,14 @@ def test_agent_dispatch_metadata_overrides_environment(monkeypatch: pytest.Monke
 def test_agent_dispatch_metadata_rejects_unknown_options() -> None:
     with pytest.raises(ValueError, match="unknown speech option"):
         agent_demo.speech_options('{"locale":"en"}')
+
+
+def test_agent_transcription_streams_independently_of_audio_playout() -> None:
+    options = agent_demo.streaming_room_options()
+    text_output = options.get_text_output_options()
+
+    assert text_output is not None
+    assert text_output.sync_transcription is False
 
 
 def test_demo_agent_exposes_two_native_function_tools() -> None:

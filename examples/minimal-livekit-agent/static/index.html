@@ -232,11 +232,16 @@
       function configureRoom() {
         room = new Room({ adaptiveStream: true, dynacast: true });
         room.registerTextStreamHandler('lk.transcription', async (reader, participantInfo) => {
-          const text = await reader.readAll();
-          const attrs = reader.info.attributes || {};
-          const id = attrs['lk.segment_id'] || reader.info.id;
-          const final = attrs['lk.transcription_final'] === 'true';
+          let text = '';
+          const initialAttrs = reader.info.attributes || {};
+          const id = initialAttrs['lk.segment_id'] || reader.info.id;
           const speaker = participantInfo.identity === room.localParticipant.identity ? 'You' : 'Agent';
+          for await (const chunk of reader) {
+            text += chunk;
+            upsertTranscript(id, speaker, text, false);
+          }
+          const finalAttrs = reader.info.attributes || {};
+          const final = finalAttrs['lk.transcription_final'] === 'true';
           upsertTranscript(id, speaker, text, final);
         });
         room.on(RoomEvent.TrackSubscribed, (track) => {

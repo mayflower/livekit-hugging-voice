@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import os
@@ -24,6 +26,18 @@ LANGUAGE_PATTERN: Final = re.compile(r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
 VOICE_PATTERN: Final = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
 MAX_BODY_BYTES: Final = 4_096
 LOGGER: Final = logging.getLogger(__name__)
+
+
+def _inline_script_hash() -> str:
+    html = (STATIC_ROOT / "index.html").read_text(encoding="utf-8")
+    inline_script = re.search(r"<script>(.*)</script>", html, flags=re.DOTALL)
+    if inline_script is None:
+        raise RuntimeError("browser page must contain exactly one inline script")
+    digest = hashlib.sha256(inline_script.group(1).encode()).digest()
+    return base64.b64encode(digest).decode()
+
+
+INLINE_SCRIPT_HASH: Final = _inline_script_hash()
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +202,7 @@ async def _index(request: web.Request) -> web.FileResponse:
             "Cache-Control": "no-store",
             "Content-Security-Policy": (
                 "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net "
-                "'sha256-GpL5u/5a0IIB6Fw1LzFc/+42IadA17KRLsmLn7v4ZnM='; "
+                f"'sha256-{INLINE_SCRIPT_HASH}'; "
                 "style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; "
                 "media-src 'self' blob:; img-src 'self' data:"
             ),

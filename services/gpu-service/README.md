@@ -11,6 +11,17 @@ one shared Parakeet, and the configured Qwen runtime pool, performs actual warmu
 and only then becomes ready. It has no model fallback and does not invoke a Hub
 download helper.
 
+The shipped profiles enable `semantic_turn.mode: smart_turn_v3` with a 250 ms
+Silero candidate pause and a 2.5 second bounded fallback. The generic
+`fixed_silence` default remains 500 ms. The service advertises the effective VAD
+configuration in `session.created`; the LiveKit plugin returns it unchanged during
+initial configuration and reconnect.
+
+Partial Parakeet transcription is enabled every 500 ms over a bounded trailing
+four-second window. Partial jobs are optional and droppable; final STT always has
+priority. Only a final transcript is committed to conversation state or passed to
+the LLM.
+
 Install the locked runtime dependencies without downloading weights:
 
 ```bash
@@ -31,3 +42,8 @@ active or draining, and the next connection receives structured
 `session_limit_reached` followed by close 4429. The default is two;
 `models.llama_parallel_slots` must be at least that value and
 `models.llama_context_size` is the total context shared across the slots.
+
+`/metrics` reports Smart Turn queue and inference time as well as estimated speech
+endpoint latency and speech-end-to-first-audio latency. The latter includes
+endpointing, STT, LLM, and TTS rather than starting only at the emitted
+`speech_stopped` event.

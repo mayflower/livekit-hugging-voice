@@ -37,8 +37,8 @@ voice profiles. `de` and `warm_female` are the defaults. The default
 
 Version 0.3.0 includes the native LiveKit plugin and tool calling, the offline CUDA
 service, configurable bounded sessions, exact model delivery, Docker Compose,
-Kustomize, capacity-aware pod discovery, CPU contracts, and reproducible GPU
-benchmark tooling.
+Kustomize, capacity-aware pod discovery, bounded semantic turn detection, CPU
+contracts, and reproducible GPU benchmark tooling.
 
 Repository safeguards include GitHub CodeQL, dependency review, OpenSSF Scorecard,
 Dependabot version and security updates, secret scanning with push protection, and
@@ -47,20 +47,26 @@ SHA-pinned Actions. Results are available through the
 [Security](https://github.com/mayflower/livekit-hugging-voice/security) dashboards.
 Vulnerabilities must be reported privately according to [`SECURITY.md`](SECURITY.md).
 
-A local RTX A6000 smoke test has verified model hashing, full GPU warmup, LiveKit
-worker registration, built-in transcription, and a 24 kHz audio response through a
-native `AgentSession`. This is functional verification, not a latency or throughput
-benchmark; see [`docs/performance.md`](docs/performance.md) for the measurement
-contract.
+A local RTX A6000 smoke test has verified model hashing, Smart Turn loading, full
+GPU warmup, LiveKit worker registration, built-in transcription, and a 24 kHz audio
+response through a native `AgentSession`. This is functional verification, not a
+latency or throughput benchmark; see [`docs/performance.md`](docs/performance.md)
+for the measurement contract.
 
 ## Quickstart
 
-Install the locked CPU development environment and run its complete checks:
+Install the locked CPU development environment and run the primary static and unit
+checks:
 
 ```bash
 uv sync --all-packages --frozen
 make check
 ```
+
+The CPU CI uses that same dependency set without optional GPU libraries. It also
+runs branch coverage, builds all Python artifacts, and validates the Docker Compose
+and Kubernetes contracts. Run `make coverage` and `make packages` for the two
+additional Python checks locally.
 
 For the local GPU demo you also need Docker Compose, NVIDIA Container Toolkit, a
 CUDA 12.8-compatible GPU, and enough disk space for roughly 23 GiB of model files.
@@ -138,6 +144,40 @@ advertises its accepted IDs in `session.created.supported_languages` and
 `supported_voices` and rejects unknown IDs during `session.update`. Omitting
 `language` or `voice` inherits the service defaults, so changing those defaults
 does not require a client-code change.
+
+## Turn detection and latency
+
+The shipped Docker and Kubernetes profiles enable `smart_turn_v3`. Silero produces
+a turn candidate after 250 ms of silence, and the shared CPU-only Smart Turn model
+classifies at most the trailing eight seconds of the current utterance. A complete
+prediction commits the turn; an incomplete prediction keeps the same turn open so
+speech can resume without creating a new user message.
+
+While the user is still speaking, the shipped profiles run optional partial
+Parakeet transcription every 500 ms over at most the trailing four seconds. These
+jobs are droppable and run only when the shared STT runtime has no final work. The
+LiveKit plugin forwards each result as a non-final `user_input_transcribed` event,
+so the browser updates the existing `lk.transcription` line in place. Only the
+final transcript enters conversation state or starts LLM and tool processing.
+Assistant output takes the existing model text-delta path immediately: the demo
+disables LiveKit's audio-synchronized transcript pacing and the browser consumes
+each `lk.transcription` stream incrementally. The displayed answer can therefore
+advance while the corresponding audio is still being synthesized or played.
+
+If speech does not resume, the default hard fallback commits the turn after 2.5
+seconds. A newly detected but not yet confirmed speech continuation receives only
+the bounded Silero continuation window; it cannot postpone the fallback
+indefinitely. The generic protocol and programmatic `fixed_silence` default remains
+500 ms. On connection, the service advertises its effective VAD configuration in
+`session.created`, and the LiveKit plugin uses that configuration for bootstrap and
+reconnect.
+
+Prometheus separates model and scheduler time from user-visible endpoint latency.
+`hugging_voice_speech_endpoint_latency_seconds` measures the estimated final speech
+sample to the committed stop, while
+`hugging_voice_speech_end_to_first_audio_seconds` includes endpointing, STT, LLM,
+and TTS up to the first response audio frame. These metrics are measurements, not
+latency guarantees.
 
 ## Development
 

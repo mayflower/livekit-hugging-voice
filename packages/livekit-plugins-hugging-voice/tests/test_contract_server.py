@@ -45,6 +45,7 @@ from livekit.agents import Agent, AgentSession, APIConnectOptions
 from livekit.agents.llm import (
     ChatContext,
     FunctionCallOutput,
+    InputTranscriptionCompleted,
     MessageGeneration,
     RealtimeError,
     function_tool,
@@ -331,11 +332,11 @@ async def test_native_session_maps_transcription_text_audio_and_metrics(
     )
     session = model.session()
     partials: list[PartialTranscription] = []
-    finals: list[object] = []
+    transcriptions: list[InputTranscriptionCompleted] = []
     metrics: list[object] = []
     speech: list[str] = []
     session.on("hugging_voice_partial_transcription", partials.append)
-    session.on("input_audio_transcription_completed", finals.append)
+    session.on("input_audio_transcription_completed", transcriptions.append)
     session.on("metrics_collected", metrics.append)
     session.on("input_speech_started", lambda event: speech.append("started"))
     session.on("input_speech_stopped", lambda event: speech.append("stopped"))
@@ -366,7 +367,18 @@ async def test_native_session_maps_transcription_text_audio_and_metrics(
                 turn_revision=0,
             )
         ]
-        assert len(finals) == 1
+        assert transcriptions == [
+            InputTranscriptionCompleted(
+                item_id="item_input",
+                transcript="Hal",
+                is_final=False,
+            ),
+            InputTranscriptionCompleted(
+                item_id="item_input",
+                transcript="Hallo",
+                is_final=True,
+            ),
+        ]
         assert session.chat_ctx.get_by_id("item_input") is not None
         assert session.chat_ctx.get_by_id("item_assistant_1") is not None
         assert any(getattr(metric, "request_id", None) == "resp_1" for metric in metrics)
@@ -782,7 +794,7 @@ async def test_input_audio_queue_full_is_explicit_and_closes_session() -> None:
 async def test_agent_session_starts_with_only_native_realtime_model(
     unused_tcp_port: int,
 ) -> None:
-    server = ContractServer(unused_tcp_port, send_transcription=False)
+    server = ContractServer(unused_tcp_port)
     await server.start()
     model = RealtimeModel(
         base_url=server.url,
@@ -792,6 +804,16 @@ async def test_agent_session_starts_with_only_native_realtime_model(
         voice_instructions="Speak warmly and slowly.",
     )
     agent_session: AgentSession[dict[str, Any]] = AgentSession(llm=model)
+    transcriptions: list[tuple[str, bool]] = []
+    final_transcription = asyncio.Event()
+
+    def on_transcription(event: Any) -> None:
+        if event.transcript:
+            transcriptions.append((event.transcript, event.is_final))
+        if event.is_final:
+            final_transcription.set()
+
+    agent_session.on("user_input_transcribed", on_transcription)
     try:
         await asyncio.wait_for(
             agent_session.start(
@@ -807,6 +829,8 @@ async def test_agent_session_starts_with_only_native_realtime_model(
         assert update.session.voice == "clear_female"
         assert update.session.voice_instructions == "Speak warmly and slowly."
         assert agent_session.llm is model
+        await asyncio.wait_for(final_transcription.wait(), timeout=1.0)
+        assert transcriptions == [("Hal", False), ("Hallo", True)]
     finally:
         await agent_session.aclose()
         await model.aclose()

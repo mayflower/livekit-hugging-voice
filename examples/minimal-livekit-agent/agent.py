@@ -18,6 +18,7 @@ from livekit.agents import (
     RunContext,
     cli,
     function_tool,
+    room_io,
 )
 from livekit.plugins import hugging_voice
 
@@ -145,6 +146,13 @@ def speech_options(metadata: str) -> SpeechOptions:
     return SpeechOptions(**configured)
 
 
+def streaming_room_options() -> room_io.RoomOptions:
+    """Publish assistant text as the model generates it, independent of audio playout."""
+    return room_io.RoomOptions(
+        text_output=room_io.TextOutputOptions(sync_transcription=False),
+    )
+
+
 @server.rtc_session(agent_name=os.getenv("HUGGING_VOICE_AGENT_NAME", "hugging-voice"))
 async def entrypoint(ctx: JobContext) -> None:
     options = speech_options(ctx.job.metadata)
@@ -163,6 +171,7 @@ async def entrypoint(ctx: JobContext) -> None:
     )
     await session.start(
         room=ctx.room,
+        room_options=streaming_room_options(),
         agent=Agent(
             instructions=os.getenv(
                 "HUGGING_VOICE_AGENT_INSTRUCTIONS",

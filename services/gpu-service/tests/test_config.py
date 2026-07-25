@@ -33,8 +33,8 @@ def test_default_config_matches_fixed_audio_and_capacity_contract() -> None:
     assert "native German speaker" in rendered
     assert "Keep the speaker identity unchanged across every utterance" in rendered
     assert settings.speech.generation.do_sample is True
-    assert settings.transcription.partial_enabled is False
-    assert settings.transcription.partial_interval_ms == 1_000
+    assert settings.transcription.partial_enabled is True
+    assert settings.transcription.partial_interval_ms == 500
     assert settings.transcription.partial_max_audio_ms == 4_000
     assert settings.speech.segmentation.first_segment_max_characters == 72
     assert settings.speech.segmentation.next_segment_max_characters == 140
@@ -101,6 +101,8 @@ def test_complete_version_03_profiles_validate(
     assert settings.server.max_sessions == sessions
     assert settings.models.llama_parallel_slots == sessions
     assert settings.tts.worker_count == workers
+    assert settings.transcription.partial_enabled is True
+    assert settings.transcription.partial_interval_ms == 500
 
 
 def test_voice_style_is_scoped_without_replacing_the_fixed_identity() -> None:

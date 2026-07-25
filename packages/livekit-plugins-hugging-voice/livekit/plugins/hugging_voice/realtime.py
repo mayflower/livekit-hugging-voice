@@ -823,6 +823,11 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                 InputSpeechStoppedEvent(user_transcription_enabled=True),
             )
         elif isinstance(event, InputTranscriptionDeltaEvent):
+            partial = InputTranscriptionCompleted(
+                item_id=event.item_id,
+                transcript=event.delta,
+                is_final=False,
+            )
             self.emit(
                 "hugging_voice_partial_transcription",
                 PartialTranscription(
@@ -832,6 +837,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                     turn_revision=event.turn_revision,
                 ),
             )
+            self.emit("input_audio_transcription_completed", partial)
         elif isinstance(event, InputTranscriptionCompletedEvent):
             self.emit(
                 "input_audio_transcription_completed",

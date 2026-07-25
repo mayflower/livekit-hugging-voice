@@ -62,9 +62,9 @@ data:
       max_audio_ms: 8000
       queue_size: 8
     transcription:
-      # Optional partial STT competes with final STT on the shared runtime.
-      partial_enabled: false
-      partial_interval_ms: 1000
+      # Droppable partial STT runs only while the shared runtime has no final work.
+      partial_enabled: true
+      partial_interval_ms: 500
       # Each partial sees only this trailing window, never the complete growing turn.
       partial_max_audio_ms: 4000
     tts:

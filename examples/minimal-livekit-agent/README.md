@@ -12,7 +12,11 @@ configure separate STT, LLM, or TTS providers and has no cloud fallback.
 It also contains a small browser client and token server. The page creates one
 private LiveKit room, explicitly dispatches the named worker, publishes the
 browser microphone, plays the agent's remote audio track, and displays LiveKit
-transcription text streams.
+transcription text streams. Non-final user transcription updates the current line
+while the user is still speaking; the final transcript replaces it without
+creating a duplicate message. Assistant text is published independently of audio
+playout and the browser consumes its stream incrementally, so generated text
+appears before the corresponding spoken sentence has finished.
 
 Copy `.env.example`, provide the LiveKit credentials plus the internal service
 token, start LiveKit and the GPU service, then run:
