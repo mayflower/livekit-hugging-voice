@@ -1,0 +1,133 @@
+name: Publish images
+
+# Publishing is an explicit, opt-in delivery step: it runs only for `main` on this
+# repository and never for a pull request or a fork.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "services/gpu-service/**"
+      - "examples/minimal-livekit-agent/**"
+      - "packages/**"
+      - "models/manifest.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/publish.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    name: ${{ matrix.image }}
+    if: github.repository == 'mayflower/livekit-hugging-voice'
+    # The CPU CI `container-build` job already builds the gpu-service image on this
+    # runner class, so disk and CPU are known to suffice. Adding a third CUDA
+    # architecture lengthens the ggml-cuda compile, hence the generous timeout.
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ matrix.timeout-minutes }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    concurrency:
+      # Serialize rather than cancel: every published commit must end up with a
+      # traceable digest.
+      group: publish-${{ matrix.image }}-${{ github.ref }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: gpu-service
+            dockerfile: services/gpu-service/Dockerfile
+            timeout-minutes: 180
+            build-args: |
+              LLAMA_CPP_COMMIT=3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
+              LLAMA_CUDA_ARCHITECTURES=86;89;120
+          - image: agent
+            dockerfile: examples/minimal-livekit-agent/Dockerfile
+            timeout-minutes: 45
+            build-args: ""
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to the container registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute immutable tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
+          # Two immutable references per build and no movable tag: the short form
+          # is what the deployment cluster's image updater matches, the full commit
+          # SHA is what `git show` accepts verbatim.
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=${{ github.sha }}
+          flavor: latest=false
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          # The locked CUDA dependency closure is gated on linux x86_64.
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            ${{ matrix.build-args }}
+            VCS_REF=${{ github.sha }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Registry cache rather than the Actions cache: a mode=max cache for the
+          # gpu-service image is far larger than the per-repository Actions cache
+          # quota, so it would evict itself and never hit.
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
+          # Keep the pushed artifact a single-platform image manifest so its digest
+          # is directly pinnable; provenance is attested separately below.
+          provenance: false
+          sbom: false
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Record published digest
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### ${IMAGE}"
+            echo
+            echo "- digest: \`${DIGEST}\`"
+            echo "- immutable reference: \`${IMAGE}@${DIGEST}\`"
+            echo "- tags:"
+            printf '%s\n' "${TAGS}" | sed 's/^/  - /'
+          } >> "${GITHUB_STEP_SUMMARY}"

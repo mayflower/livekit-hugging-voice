@@ -65,7 +65,9 @@ jobs:
 
   container-build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # The ggml-cuda compile scales with the number of CUDA architectures in
+    # LLAMA_CUDA_ARCHITECTURES; the default list currently holds three.
+    timeout-minutes: 120
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
