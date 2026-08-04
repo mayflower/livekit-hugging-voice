@@ -10,6 +10,15 @@
 No VRAM requirement or latency result is claimed until measured by the commands
 below.
 
+The bundled `llama-server` is compiled for the real CUDA architectures listed in
+the `LLAMA_CUDA_ARCHITECTURES` build argument, currently `86;89;120` (Ampere
+RTX A6000, RTX 6000 Ada, RTX PRO 6000 Blackwell). No PTX is embedded, so a GPU
+whose compute capability is absent from that list fails at runtime with
+`no kernel image is available for execution on the device`. Override the build
+argument — `HUGGING_VOICE_CUDA_ARCHITECTURES` for Compose — when building for
+other hardware. The published image records its list in the
+`io.hugging-voice.cuda-architectures` label.
+
 ## Offline model delivery
 
 Model weights are not copied into either image. Fetch and verify them explicitly:

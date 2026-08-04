@@ -8,6 +8,7 @@ services:
       dockerfile: services/gpu-service/Dockerfile
       args:
         LLAMA_CPP_COMMIT: 3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
+        LLAMA_CUDA_ARCHITECTURES: "${HUGGING_VOICE_CUDA_ARCHITECTURES:-86;89;120}"
         VCS_REF: ${VCS_REF:-local}
     ports:
       - "${HUGGING_VOICE_BIND_ADDRESS:-127.0.0.1}:${HUGGING_VOICE_PORT:-8765}:8765"

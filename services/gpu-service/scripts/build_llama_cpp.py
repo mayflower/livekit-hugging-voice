@@ -7,13 +7,16 @@ import subprocess
 from pathlib import Path
 
 LLAMA_CPP_COMMIT = "3ce7da2c852c538c4c5f9806da27029cf8c9cc4a"
+# Must stay in sync with LLAMA_CUDA_ARCHITECTURES in services/gpu-service/Dockerfile
+# so a locally built llama-server runs on the same GPUs as the published image.
+CUDA_ARCHITECTURES = "86;89;120"
 
 
 def run(command: list[str], *, cwd: Path) -> None:
     subprocess.run(command, cwd=cwd, check=True)
 
 
-def build(source: Path, build_dir: Path, *, jobs: int) -> Path:
+def build(source: Path, build_dir: Path, *, jobs: int, cuda_architectures: str) -> Path:
     actual_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=source,
@@ -33,6 +36,8 @@ def build(source: Path, build_dir: Path, *, jobs: int) -> Path:
             "-B",
             str(build_dir),
             "-DGGML_CUDA=ON",
+            "-DGGML_NATIVE=OFF",
+            f"-DCMAKE_CUDA_ARCHITECTURES={cuda_architectures}",
             "-DLLAMA_CURL=OFF",
             "-DLLAMA_BUILD_SERVER=ON",
             "-DLLAMA_BUILD_UI=OFF",
@@ -58,8 +63,16 @@ def main() -> int:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=4)
+    parser.add_argument("--cuda-architectures", default=CUDA_ARCHITECTURES)
     args = parser.parse_args()
-    print(build(args.source.resolve(), args.build.resolve(), jobs=args.jobs))
+    print(
+        build(
+            args.source.resolve(),
+            args.build.resolve(),
+            jobs=args.jobs,
+            cuda_architectures=args.cuda_architectures,
+        )
+    )
     return 0
 
 

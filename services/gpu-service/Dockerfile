@@ -6,6 +6,19 @@ ARG PYTHON_VERSION=3.11.15
 
 FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu${UBUNTU_VERSION}@sha256:3986465b3dd3b4d602c07061f2cff417e0bfb24810129408d4eb12e111015a6c AS llama-builder
 ARG LLAMA_CPP_COMMIT=3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
+# Real (SASS) CUDA architectures compiled into llama-server. Every GPU the image is
+# deployed to must be listed: a missing architecture fails at runtime with
+# "no kernel image is available for execution on the device", not at build time.
+#   86  = RTX A6000 (Ampere)
+#   89  = RTX 6000 Ada
+#   120 = RTX PRO 6000 Blackwell
+# Deliberately no "-virtual" (PTX) entry: SASS is present for every target, and JIT
+# compiling the ggml-cuda PTX would need a writable cache the read-only runtime
+# filesystem does not provide.
+ARG LLAMA_CUDA_ARCHITECTURES="86;89;120"
+# nvcc peaks at roughly 2-3 GiB RSS per ggml-cuda template instance. Empty means
+# "$(nproc)"; set an explicit number on many-core builders to bound peak memory.
+ARG LLAMA_BUILD_JOBS=""
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential ca-certificates cmake git ninja-build \
@@ -20,14 +33,14 @@ RUN git clone --filter=blob:none https://github.com/ggml-org/llama.cpp.git \
         -DCMAKE_BUILD_TYPE=Release \
         -DGGML_CUDA=ON \
         -DGGML_NATIVE=OFF \
-        "-DCMAKE_CUDA_ARCHITECTURES=86;89" \
+        "-DCMAKE_CUDA_ARCHITECTURES=${LLAMA_CUDA_ARCHITECTURES}" \
         -DLLAMA_BUILD_SERVER=ON \
         -DLLAMA_BUILD_UI=OFF \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DLLAMA_CURL=OFF \
         -DBUILD_SHARED_LIBS=OFF \
-    && cmake --build build --target llama-server --parallel "$(nproc)" \
+    && cmake --build build --target llama-server --parallel "${LLAMA_BUILD_JOBS:-$(nproc)}" \
     && strip build/bin/llama-server
 
 FROM ubuntu:${UBUNTU_VERSION}@sha256:52df9b1ee71626e0088f7d400d5c6b5f7bb916f8f0c82b474289a4ece6cf3faf AS python-builder
@@ -88,12 +101,14 @@ COPY services/gpu-service/config/default.yaml /etc/hugging-voice/config.yaml
 COPY services/gpu-service/config/profiles/ /etc/hugging-voice/profiles/
 COPY models/manifest.yaml /etc/hugging-voice/manifest.yaml
 ARG LLAMA_CPP_COMMIT=3ce7da2c852c538c4c5f9806da27029cf8c9cc4a
+ARG LLAMA_CUDA_ARCHITECTURES="86;89;120"
 ARG VCS_REF=unknown
 ARG SOURCE_URL=unknown
 LABEL org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.licenses="Apache-2.0" \
-      io.hugging-voice.llama-cpp-commit="${LLAMA_CPP_COMMIT}"
+      io.hugging-voice.llama-cpp-commit="${LLAMA_CPP_COMMIT}" \
+      io.hugging-voice.cuda-architectures="${LLAMA_CUDA_ARCHITECTURES}"
 ENV PATH=/opt/venv/bin:/opt/python/bin:/usr/local/bin:/usr/bin:/bin \
     LD_LIBRARY_PATH=/opt/python/lib \
     HF_HUB_OFFLINE=1 \
