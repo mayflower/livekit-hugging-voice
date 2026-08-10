@@ -453,9 +453,12 @@ class LlamaCppChatRuntime:
                             # Text is already on the wire and cannot be recalled.
                             # A call that fails validation must therefore cost
                             # only itself, not the words the caller already heard.
+                            # ValueError belongs in the catch: canonical_json
+                            # rejects non-finite numbers with a bare one, and
+                            # json.loads lets NaN through to reach it.
                             try:
                                 tool_call.push(chunks)
-                            except ToolCallValidationError:
+                            except (ToolCallValidationError, ValueError):
                                 tool_call_broken = True
                         else:
                             tool_call.push(chunks)
@@ -483,7 +486,7 @@ class LlamaCppChatRuntime:
                     if visible_seen:
                         try:
                             yield tool_call.finish(tools=tools, tool_choice=tool_choice)
-                        except ToolCallValidationError:
+                        except (ToolCallValidationError, ValueError):
                             tool_call_broken = True
                     else:
                         yield tool_call.finish(tools=tools, tool_choice=tool_choice)
@@ -491,6 +494,13 @@ class LlamaCppChatRuntime:
                     raise ToolCallValidationError(
                         "model did not emit a tool call with tool_choice='required'"
                     )
+                # A discarded call is only reachable after visible text, so
+                # raising is not an option — the caller already heard the
+                # announcement, and the turn ends spoken but without the lookup.
+                # The generation is already counted as a mixed-output violation,
+                # which is the signal to watch. ``tool_choice="required"`` cannot
+                # be honoured in that state either; it is used only by the
+                # startup readiness probe, which never speaks first.
             except asyncio.CancelledError:
                 if response is not None:
                     response.close()

@@ -809,3 +809,44 @@ async def test_gemma_keeps_spoken_text_when_the_trailing_tool_call_is_malformed(
     finally:
         await runtime.aclose()
         await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_gemma_keeps_spoken_text_when_tool_arguments_are_not_finite_json() -> None:
+    """NaN in the arguments must not retroactively kill a turn that already spoke.
+
+    json.loads accepts NaN, so the value survives push and only canonical_json
+    rejects it — with a bare ValueError, not a ToolCallValidationError. Guarding
+    the narrow type left the fatal path open for exactly this input.
+    """
+    runtime, runner = await _sse_runtime(
+        [
+            {"content": "Ich schaue das nach. "},
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_kb",
+                        "function": {
+                            "name": "knowledge_base_search",
+                            "arguments": '{"query": NaN}',
+                        },
+                    }
+                ]
+            },
+        ]
+    )
+    try:
+        events = [
+            event
+            async for event in runtime.stream_response(
+                messages=[GemmaMessage(role="user", content="Was gibt es zu sehen?")],
+                tools=[_search_tool()],
+                slot_id=0,
+            )
+        ]
+        assert [type(event).__name__ for event in events] == ["TextDelta"]
+        assert runtime.mixed_output_violations == 1
+    finally:
+        await runtime.aclose()
+        await runner.cleanup()
