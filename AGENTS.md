@@ -111,8 +111,10 @@ process startup. There is no hot swap or automatic fallback.
   model generation. An identical update is idempotent; a semantic change after
   freeze is rejected.
 - A response is either a message response or a tool-call response. A tool-call
-  generation emits no visible assistant text and starts no TTS. Mixed text and
-  function-call output is a model/protocol error.
+  generation emits no visible assistant text and starts no TTS. A generation that
+  mixes both is a counted model violation, not a fatal error: the text finishes as
+  a message response and the call follows as a second, call-only response of the
+  same turn, so no single response carries both sorts.
 - A model call remains pending until LiveKit returns its matching result. The GPU
   service commits the call and result atomically and never starts the subsequent
   reply automatically; LiveKit starts it after the result ACK.

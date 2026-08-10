@@ -17,6 +17,7 @@ from hugging_voice_protocol.events import (
     InputAudioBufferCommitEvent,
     InputTranscriptionCompletedEvent,
     ResponseCancelEvent,
+    ResponseCreatedEvent,
     ResponseCreateEvent,
     ResponseDoneEvent,
     ResponseOutputAudioDeltaEvent,
@@ -264,6 +265,39 @@ class ToolGemma:
         assert slot_id == 0
         yield ToolCall(call_id="call_add", name="add_numbers", arguments='{"a":19,"b":23}')
         yield TextUsage(prompt_tokens=4, completion_tokens=8, total_tokens=12)
+
+
+class TextThenToolGemma:
+    """One generation that announces the lookup and then emits the call.
+
+    Gemma does this unprompted; the runtime forwards both instead of aborting.
+    """
+
+    async def stream_response(
+        self,
+        *,
+        messages: Sequence[GemmaMessage],
+        instructions: str = "",
+        language_instruction: str = "",
+        system_prompt: str = "",
+        tools: object = (),
+        tool_choice: object = "auto",
+        slot_id: int = 0,
+        max_tokens: int | None = None,
+    ) -> AsyncIterator[TextDelta | ToolCall | TextUsage]:
+        del (
+            messages,
+            instructions,
+            language_instruction,
+            system_prompt,
+            tools,
+            tool_choice,
+            slot_id,
+            max_tokens,
+        )
+        yield TextDelta("Ich schaue das nach. ")
+        yield ToolCall(call_id="call_add", name="add_numbers", arguments='{"a":19,"b":23}')
+        yield TextUsage(prompt_tokens=4, completion_tokens=9, total_tokens=13)
 
 
 class ToolThenTextGemma:
@@ -855,6 +889,111 @@ async def test_tool_generation_is_silent_and_never_starts_tts() -> None:
     )
     done = [event for event in transport.events if isinstance(event, ResponseDoneEvent)]
     assert len(done) == 1 and done[0].reason.value == "tool_call"
+
+
+@pytest.mark.asyncio
+async def test_mixed_output_speaks_then_delivers_the_tool_call_as_a_second_response() -> None:
+    """The announcement must be spoken and the call must still reach LiveKit.
+
+    A response stays single-sorted: the text finishes as a message response and
+    the call follows as a second response of the same turn.
+    """
+    state, transport = make_state()
+    pipeline = VoicePipeline(
+        state,
+        stt=UnusedSTT(),
+        tts=ImmediateTTS(),
+        gemma=TextThenToolGemma(),
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+    await pipeline.handle_event(
+        ResponseCreateEvent(event_id="evt_mixed", session_id=state.session_id)
+    )
+    await wait_for_response_end(pipeline)
+
+    created = [event for event in transport.events if isinstance(event, ResponseCreatedEvent)]
+    assert len(created) == 2
+    assert created[0].generation_id != created[1].generation_id
+    assert created[0].response_id != created[1].response_id
+    assert created[0].item_id != created[1].item_id
+    assert created[0].turn_id == created[1].turn_id
+    assert created[0].turn_revision == created[1].turn_revision
+
+    done = [event for event in transport.events if isinstance(event, ResponseDoneEvent)]
+    assert [event.reason.value for event in done] == ["completed", "tool_call"]
+
+    calls = [
+        event
+        for event in transport.events
+        if isinstance(event, ResponseOutputFunctionCallDoneEvent)
+    ]
+    assert len(calls) == 1
+    assert calls[0].generation_id == created[1].generation_id
+    assert calls[0].arguments == '{"a":19,"b":23}'
+
+    spoken = [
+        event
+        for event in transport.events
+        if isinstance(
+            event,
+            ResponseOutputTextDeltaEvent
+            | ResponseOutputTextDoneEvent
+            | ResponseOutputAudioDeltaEvent
+            | ResponseOutputAudioDoneEvent,
+        )
+    ]
+    assert spoken
+    assert {event.generation_id for event in spoken} == {created[0].generation_id}
+    assert any(
+        isinstance(event, ResponseOutputTextDoneEvent) and event.text == "Ich schaue das nach. "
+        for event in spoken
+    )
+
+    assert state.pending_call is not None
+    assert state.pending_call.call_id == "call_add"
+    assert [entry.content for entry in state.conversation.entries if entry.role == "assistant"] == [
+        "Ich schaue das nach."
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mixed_output_tool_call_is_dropped_when_the_caller_barges_in() -> None:
+    """A barge-in during the announcement cancels the turn, call included."""
+    state, transport = make_state(probability=1.0)
+    tts = GateTTS()
+    pipeline = VoicePipeline(
+        state,
+        stt=UnusedSTT(),
+        tts=tts,
+        gemma=TextThenToolGemma(),
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+    await pipeline.handle_event(
+        ResponseCreateEvent(event_id="evt_mixed", session_id=state.session_id)
+    )
+    await asyncio.wait_for(tts.started.wait(), timeout=1.0)
+
+    await pipeline.handle_event(
+        InputAudioBufferAppendEvent(
+            event_id="evt_audio",
+            session_id=state.session_id,
+            sequence=0,
+            audio=base64.b64encode(bytes(512 * 3 * 2)).decode("ascii"),
+        )
+    )
+    await wait_for_response_end(pipeline)
+
+    assert not any(
+        isinstance(event, ResponseOutputFunctionCallDoneEvent) for event in transport.events
+    )
+    assert state.pending_call is None
+    created = [event for event in transport.events if isinstance(event, ResponseCreatedEvent)]
+    assert len(created) == 1
+    done = [event for event in transport.events if isinstance(event, ResponseDoneEvent)]
+    assert len(done) == 1
+    assert done[0].reason.value == "barge_in"
 
 
 @pytest.mark.asyncio
