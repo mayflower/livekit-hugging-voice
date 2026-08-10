@@ -658,3 +658,154 @@ async def test_gemma_aggregates_one_structured_tool_call_with_slot_cache() -> No
     finally:
         await runtime.aclose()
         await runner.cleanup()
+
+
+async def _sse_runtime(
+    deltas: list[dict[str, Any]],
+) -> tuple[LlamaCppChatRuntime, web.AppRunner]:
+    """Serve a fixed list of `choices[0].delta` payloads as one SSE stream."""
+
+    async def handler(request: web.Request) -> web.StreamResponse:
+        await request.json()
+        response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+        await response.prepare(request)
+        for delta in deltas:
+            event = {"choices": [{"delta": delta}]}
+            await response.write(f"data: {json.dumps(event)}\n\n".encode())
+        await response.write(b"data: [DONE]\n\n")
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    sockets = site._server.sockets  # type: ignore[union-attr]
+    runtime = LlamaCppChatRuntime(port=sockets[0].getsockname()[1])
+    return runtime, runner
+
+
+def _search_tool(name: str = "knowledge_base_search") -> FunctionTool:
+    return FunctionTool(
+        function=FunctionDefinition(
+            name=name,
+            description="Search the knowledge base.",
+            parameters={"type": "object", "properties": {}},
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemma_streams_text_then_tool_call_and_counts_the_violation() -> None:
+    """An announcement followed by a tool call must survive, not abort the call.
+
+    Gemma does this on its own: it says "let me look that up" and appends the
+    call to the same completion. Raising here killed the whole session.
+    """
+    runtime, runner = await _sse_runtime(
+        [
+            {"content": "Ich schaue das nach. "},
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_kb",
+                        "function": {
+                            "name": "knowledge_base_search",
+                            "arguments": '{"query":"Muenchen"}',
+                        },
+                    }
+                ]
+            },
+        ]
+    )
+    try:
+        events = [
+            event
+            async for event in runtime.stream_response(
+                messages=[GemmaMessage(role="user", content="Was gibt es zu sehen?")],
+                tools=[_search_tool()],
+                slot_id=0,
+            )
+        ]
+        assert [type(event).__name__ for event in events] == ["TextDelta", "ToolCall"]
+        assert cast(TextDelta, events[0]).text == "Ich schaue das nach. "
+        assert cast(ToolCall, events[1]).name == "knowledge_base_search"
+        assert runtime.mixed_output_violations == 1
+    finally:
+        await runtime.aclose()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_gemma_drops_trailing_text_after_a_tool_call() -> None:
+    """Text after the call comments on a result that does not exist yet."""
+    runtime, runner = await _sse_runtime(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_kb",
+                        "function": {
+                            "name": "knowledge_base_search",
+                            "arguments": '{"query":"Muenchen"}',
+                        },
+                    }
+                ]
+            },
+            {"content": "Einen Moment bitte."},
+        ]
+    )
+    try:
+        events = [
+            event
+            async for event in runtime.stream_response(
+                messages=[GemmaMessage(role="user", content="Was gibt es zu sehen?")],
+                tools=[_search_tool()],
+                slot_id=0,
+            )
+        ]
+        assert [type(event).__name__ for event in events] == ["ToolCall"]
+        assert runtime.mixed_output_violations == 1
+    finally:
+        await runtime.aclose()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_gemma_keeps_spoken_text_when_the_trailing_tool_call_is_malformed() -> None:
+    """Once text is on the wire, a broken call must not retroactively fail the turn.
+
+    The 96-token tool budget makes truncated arguments a real possibility after
+    an announcement has eaten into it.
+    """
+    runtime, runner = await _sse_runtime(
+        [
+            {"content": "Ich schaue das nach. "},
+            {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "call_kb",
+                        "function": {"name": "unknown_tool", "arguments": "{"},
+                    }
+                ]
+            },
+        ]
+    )
+    try:
+        events = [
+            event
+            async for event in runtime.stream_response(
+                messages=[GemmaMessage(role="user", content="Was gibt es zu sehen?")],
+                tools=[_search_tool()],
+                slot_id=0,
+            )
+        ]
+        assert [type(event).__name__ for event in events] == ["TextDelta"]
+        assert runtime.mixed_output_violations == 1
+    finally:
+        await runtime.aclose()
+        await runner.cleanup()
