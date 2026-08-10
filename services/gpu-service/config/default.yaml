@@ -62,8 +62,12 @@ semantic_turn:
   queue_size: 8
 
 transcription:
-  # Droppable partial STT runs only while the shared runtime has no final work.
-  partial_enabled: true
+  # Off, matching the code default and docs/architecture.md. A partial only
+  # STARTS while the runtime is idle, but nothing preempts it once running
+  # (schedulers/stt.py checks is_stale only before and after inference), so a
+  # final arriving mid-partial waits out its full inference — measured at
+  # 1.21 s of queue time per final, with 9 of 28 partials discarded anyway.
+  partial_enabled: false
   partial_interval_ms: 500
   # Each partial sees only this trailing window, never the complete growing turn.
   partial_max_audio_ms: 4000
