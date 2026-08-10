@@ -1254,3 +1254,42 @@ async def test_tool_result_is_acked_during_speak_and_final_reply_is_deferred() -
         "filler_or_explicit_say",
         "final_response",
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_second_deferral_is_rejected_as_a_protocol_error_not_a_dead_session() -> None:
+    """A contended deferral slot must cost the request, never the session.
+
+    Since a mixed generation can park its tool call in the single deferral slot,
+    a response.create arriving while a say() is speaking can find that slot taken.
+    A bare ValueError escapes consume() — it only catches PipelineEventError and
+    ValidationError — and takes the whole session with it.
+    """
+    state, _ = make_state()
+    pipeline = VoicePipeline(
+        state,
+        stt=UnusedSTT(),
+        tts=GateTTS(),
+        gemma=ImmediateGemma(),
+        speech=SpeechSettings(),
+        telemetry=ServiceTelemetry(),
+    )
+    await pipeline.handle_event(
+        ResponseSpeakEvent(
+            event_id="evt_speak",
+            session_id=state.session_id,
+            text="Einen Moment.",
+        )
+    )
+    assert pipeline._response is not None and pipeline._response.direct_speak
+    parked: asyncio.Task[None] = asyncio.create_task(asyncio.sleep(3_600))
+    pipeline._deferred_response_task = parked
+    try:
+        with pytest.raises(PipelineEventError) as excinfo:
+            await pipeline._start_response(response_instructions="")
+        assert excinfo.value.code is ErrorCode.SESSION_STATE_CONFLICT
+    finally:
+        pipeline._deferred_response_task = None
+        parked.cancel()
+        await asyncio.gather(parked, return_exceptions=True)
+        await pipeline.drain()

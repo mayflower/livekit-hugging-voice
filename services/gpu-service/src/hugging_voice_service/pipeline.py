@@ -1102,7 +1102,14 @@ class VoicePipeline:
         if self._response is not None:
             if direct_text is None and self._response.direct_speak:
                 if self._deferred_response_task is not None:
-                    raise ValueError("a response is already deferred for this session")
+                    # Structured, so consume() answers with an error event rather
+                    # than letting a bare ValueError end the session. The slot is
+                    # shared with the tool call of a mixed generation, so a client
+                    # request can now genuinely find it taken.
+                    raise PipelineEventError(
+                        ErrorCode.SESSION_STATE_CONFLICT,
+                        "a response is already deferred for this session",
+                    )
                 self._deferred_response_task = asyncio.create_task(
                     self._start_response_after_direct_speak(
                         response_instructions=response_instructions,
