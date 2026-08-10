@@ -31,11 +31,15 @@ source tree: `llama-server --help` in the running image reports
 It is a latency option here, not a memory option, and the reason is measured.
 Gemma 4 uses interleaved sliding-window attention. With the window active,
 llama-server cannot reuse the cached prompt prefix and re-processes the whole
-prompt on every request — on a real call, `llamacpp:prompt_tokens_total` divided
-by the number of generations came to roughly **1474 processed prompt tokens per
-request while only about 65 were new**, at `llamacpp:prompt_tokens_seconds`
-around 311. That accounts for the observed time to first token almost entirely.
-The upstream report is ggml-org/llama.cpp#21831, reproduced on Gemma 4.
+prompt on every request. From one real call: `llamacpp:prompt_tokens_total`
+29738 over `llm_ttft_seconds_count` 20 text generations is **1487 processed
+prompt tokens per generation**, or 1293 across all 23 LLM requests — the divisor
+matters, the order of magnitude does not. At `llamacpp:prompt_tokens_seconds`
+311 that is about 3.7 s of prompt processing per request, which accounts for the
+observed time to first token almost entirely. How many tokens were *new* per
+turn is not derivable from these counters; a `/slots` read during the call
+showed 65 against a 1388-token prompt. The upstream report is
+ggml-org/llama.cpp#21831, reproduced on Gemma 4.
 
 The price is the KV cache: without the flag only the sliding layers keep a small
 window, with it every layer holds the full context. On the deployment this
@@ -50,4 +54,4 @@ with two sessions in both arms, the VRAM footprint from
 `benchmarks/gpu_memory.py`, `llamacpp:predicted_tokens_seconds` as the decode
 control — ggml-org/llama.cpp#24628 reports a decode penalty at deep context —
 and one tool-calling call. The success criterion is unambiguous: processed
-prompt tokens per request must fall from ~1474 to roughly the size of one turn.
+prompt tokens per generation must fall from ~1487 to roughly the size of one turn.
