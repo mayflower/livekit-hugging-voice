@@ -46,6 +46,7 @@ class LlamaProcess:
         parallel_slots: int = 2,
         context_size: int = 32_768,
         flash_attention: str = "auto",
+        swa_full: bool = False,
         continuous_batching: bool = True,
         batch_size: int = 2_048,
         ubatch_size: int = 512,
@@ -79,6 +80,7 @@ class LlamaProcess:
         self.parallel_slots = parallel_slots
         self.context_size = context_size
         self.flash_attention = flash_attention
+        self.swa_full = swa_full
         self.batch_size = batch_size
         self.ubatch_size = ubatch_size
         self.cache_type_k = cache_type_k
@@ -114,6 +116,9 @@ class LlamaProcess:
             "--cont-batching",
             "--flash-attn",
             self.flash_attention,
+            # Conditional rather than a value flag: llama-server has no
+            # --swa-full=false, the flag's presence is the setting.
+            *(("--swa-full",) if self.swa_full else ()),
             "--batch-size",
             str(self.batch_size),
             "--ubatch-size",

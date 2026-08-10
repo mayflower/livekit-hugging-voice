@@ -245,3 +245,29 @@ async def test_llama_startup_timeout_cleans_child_process(
 
     assert process.state is LlamaProcessState.FAILED
     assert process.returncode is None
+
+
+def test_llama_swa_full_is_off_by_default_and_opt_in(tmp_path: Path) -> None:
+    """The flag exists but preserves the upstream default in the baseline.
+
+    Gemma 4 uses sliding-window attention. Without --swa-full llama-server cannot
+    reuse the cached prefix (llama.cpp#21831) and re-prefills the whole prompt on
+    every turn — measured at ~1474 processed prompt tokens per request where ~65
+    were new. The flag fixes that, but it also sizes the KV cache to the full
+    context, so switching it on is a deliberate, measured decision.
+    """
+    default = LlamaProcess(
+        binary=tmp_path / "llama-server",
+        model=tmp_path / "gemma.gguf",
+        parallel_slots=2,
+    )
+    assert "--swa-full" not in default.command
+
+    enabled = LlamaProcess(
+        binary=tmp_path / "llama-server",
+        model=tmp_path / "gemma.gguf",
+        parallel_slots=2,
+        context_size=16_384,
+        swa_full=True,
+    )
+    assert "--swa-full" in enabled.command

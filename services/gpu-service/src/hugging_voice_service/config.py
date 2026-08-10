@@ -42,6 +42,12 @@ class ModelSettings(StrictConfig):
     llama_parallel_slots: int = Field(default=2, ge=1, le=64)
     # These are a narrow allowlist confirmed against llama_cpp_commit.
     llama_flash_attention: Literal["auto", "on"] = "auto"
+    # Keeps the whole sliding-window KV cache instead of letting the window drop
+    # it. Gemma 4 is iSWA, and without this llama-server cannot reuse the cached
+    # prefix and re-prefills the entire prompt every turn (llama.cpp#21831) —
+    # measured at ~1474 processed prompt tokens per request where ~65 were new.
+    # The price is a KV cache sized to the full context, hence the bound below.
+    llama_swa_full: bool = False
     llama_continuous_batching: Literal[True] = True
     llama_batch_size: int = Field(default=2_048, ge=32, le=4_096)
     llama_ubatch_size: int = Field(default=512, ge=32, le=2_048)
@@ -56,6 +62,23 @@ class ModelSettings(StrictConfig):
     def validate_batch_sizes(self) -> ModelSettings:
         if self.llama_ubatch_size > self.llama_batch_size:
             raise ValueError("models.llama_ubatch_size cannot exceed models.llama_batch_size")
+        return self
+
+    @model_validator(mode="after")
+    def validate_swa_full_context(self) -> ModelSettings:
+        """Bound the KV cache that llama_swa_full allocates.
+
+        Without the flag only the sliding layers keep a small window; with it
+        every layer holds the full context. On the deployment this service runs
+        on, 32768 tokens work out to roughly 31 GiB of KV on a GPU shared with
+        five other tenants, and 16384 to about half of that. The bound lives
+        here so the expensive combination cannot be configured by accident.
+        """
+        if self.llama_swa_full and self.llama_context_size > 16_384:
+            raise ValueError(
+                "models.llama_swa_full requires models.llama_context_size <= 16384; "
+                f"got {self.llama_context_size}"
+            )
         return self
 
 

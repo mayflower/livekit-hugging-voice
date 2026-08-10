@@ -17,3 +17,37 @@ only flash attention `auto`/`on`, K/V cache `f16`/`q8_0`, bounded batch and
 ubatch sizes, and bounded cache reuse. No arbitrary llama-server argument list
 is accepted. A candidate cannot become the default without measured latency,
 memory, quality, and structured tool-calling acceptance.
+
+## `--swa-full`
+
+Added to the allowlist as `models.llama_swa_full`, default `false`, which is the
+upstream default and therefore leaves the baseline unchanged.
+
+Verified against the binary the pinned commit produces rather than against the
+source tree: `llama-server --help` in the running image reports
+`--swa-full  use full-size SWA cache (default: false)`, alongside
+`-ctxcp, --ctx-checkpoints, --swa-checkpoints N` and `--cache-reuse N`.
+
+It is a latency option here, not a memory option, and the reason is measured.
+Gemma 4 uses interleaved sliding-window attention. With the window active,
+llama-server cannot reuse the cached prompt prefix and re-processes the whole
+prompt on every request — on a real call, `llamacpp:prompt_tokens_total` divided
+by the number of generations came to roughly **1474 processed prompt tokens per
+request while only about 65 were new**, at `llamacpp:prompt_tokens_seconds`
+around 311. That accounts for the observed time to first token almost entirely.
+The upstream report is ggml-org/llama.cpp#21831, reproduced on Gemma 4.
+
+The price is the KV cache: without the flag only the sliding layers keep a small
+window, with it every layer holds the full context. On the deployment this
+service runs on that works out to roughly 31 GiB at 32768 tokens and about half
+at 16384, on a GPU shared with five other tenants. `ModelSettings` therefore
+rejects `llama_swa_full` together with a context above 16384 rather than leaving
+that coupling to a comment.
+
+Still outstanding before the flag becomes a profile default, per the rule above:
+prefill latency and time to first token from `benchmarks/multisession_soak.py`
+with two sessions in both arms, the VRAM footprint from
+`benchmarks/gpu_memory.py`, `llamacpp:predicted_tokens_seconds` as the decode
+control — ggml-org/llama.cpp#24628 reports a decode penalty at deep context —
+and one tool-calling call. The success criterion is unambiguous: processed
+prompt tokens per request must fall from ~1474 to roughly the size of one turn.

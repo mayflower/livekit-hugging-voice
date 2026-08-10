@@ -338,3 +338,23 @@ def test_reference_transcripts_are_identical_across_code_yaml_and_recordings() -
             assert reference.text == code.voices[voice_id].refs[language].text
             assert reference.text == recorded[(voice_id, language)]
             assert reference.audio == code.voices[voice_id].refs[language].audio
+
+
+def test_swa_full_cannot_be_combined_with_a_context_that_blows_the_vram_budget() -> None:
+    """--swa-full sizes the KV cache to the full context, so the two are coupled.
+
+    At 32768 tokens that is roughly 31 GiB on a card this service shares with
+    five other tenants; at 16384 it is about half. The limit lives here rather
+    than in a comment so the combination cannot be configured by accident.
+    """
+    assert ServiceSettings().models.llama_swa_full is False
+
+    allowed = ServiceSettings(
+        models={"llama_swa_full": True, "llama_context_size": 16_384}  # type: ignore[arg-type]
+    )
+    assert allowed.models.llama_swa_full is True
+
+    with pytest.raises(ValidationError, match="16384"):
+        ServiceSettings(
+            models={"llama_swa_full": True, "llama_context_size": 32_768}  # type: ignore[arg-type]
+        )

@@ -161,6 +161,7 @@ def _llama_factory(binary: Path, model: Path, settings: ServiceSettings) -> Llam
         parallel_slots=settings.models.llama_parallel_slots,
         context_size=settings.models.llama_context_size,
         flash_attention=settings.models.llama_flash_attention,
+        swa_full=settings.models.llama_swa_full,
         continuous_batching=settings.models.llama_continuous_batching,
         batch_size=settings.models.llama_batch_size,
         ubatch_size=settings.models.llama_ubatch_size,
