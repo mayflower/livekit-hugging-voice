@@ -484,23 +484,31 @@ class LlamaCppChatRuntime:
                         yield TextDelta(visible)
                 if tool_call.present and not tool_call_broken:
                     if visible_seen:
+                        # Only the accumulator call belongs in the try. Wrapping
+                        # the yield too would also swallow whatever a consumer
+                        # throws in at that suspension point.
+                        finished: ToolCall | None
                         try:
-                            yield tool_call.finish(tools=tools, tool_choice=tool_choice)
+                            finished = tool_call.finish(tools=tools, tool_choice=tool_choice)
                         except (ToolCallValidationError, ValueError):
-                            tool_call_broken = True
+                            # Raising is not an option: the caller already heard
+                            # the announcement, so the turn ends spoken but
+                            # without the lookup. The generation is already
+                            # counted as a mixed-output violation, which is the
+                            # signal to watch. No flag is set here on purpose —
+                            # the generation is over and nothing would read it.
+                            finished = None
+                        if finished is not None:
+                            yield finished
                     else:
                         yield tool_call.finish(tools=tools, tool_choice=tool_choice)
                 elif tool_choice == "required" and not tool_call.present:
                     raise ToolCallValidationError(
                         "model did not emit a tool call with tool_choice='required'"
                     )
-                # A discarded call is only reachable after visible text, so
-                # raising is not an option — the caller already heard the
-                # announcement, and the turn ends spoken but without the lookup.
-                # The generation is already counted as a mixed-output violation,
-                # which is the signal to watch. ``tool_choice="required"`` cannot
-                # be honoured in that state either; it is used only by the
-                # startup readiness probe, which never speaks first.
+                # ``tool_choice="required"`` cannot be honoured once a call has
+                # been discarded either; it is used only by the startup readiness
+                # probe, which never speaks first.
             except asyncio.CancelledError:
                 if response is not None:
                     response.close()
