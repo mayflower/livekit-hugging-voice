@@ -67,6 +67,26 @@ def common_response_fields(generation: int) -> dict[str, Any]:
     }
 
 
+def sibling_response_fields(generation: int) -> dict[str, Any]:
+    """Identity of the call-only second response of a mixed generation.
+
+    The service keeps ``turn_id`` and ``turn_revision`` — it is still the same
+    turn — and mints a fresh generation, response and item id, because
+    ``_start_response`` mints those unconditionally. Reusing the ids of the
+    spoken response would test a message the service never sends.
+    """
+
+    return {
+        "event_id": f"evt_response_{generation}_call",
+        "session_id": "session_contract",
+        "turn_id": f"turn_{generation}",
+        "turn_revision": generation,
+        "generation_id": f"gen_{generation}_call",
+        "response_id": f"resp_{generation}_call",
+        "item_id": f"item_assistant_{generation}_call",
+    }
+
+
 @dataclass
 class ContractServer:
     port: int
@@ -80,6 +100,7 @@ class ContractServer:
     default_language: str = "de"
     default_voice: str = "warm_female"
     tool_first: bool = False
+    mixed_output: bool = False
     reject_session_update_number: int | None = None
     pause_session_update_number: int | None = None
 
@@ -276,6 +297,41 @@ class ContractServer:
                 ),
             ]
         )
+        for event in events:
+            await websocket.send_str(event.model_dump_json())
+        if self.mixed_output and generation == 1:
+            await self._send_deferred_tool_call(websocket, generation)
+
+    async def _send_deferred_tool_call(
+        self,
+        websocket: web.WebSocketResponse,
+        generation: int,
+    ) -> None:
+        """Push the sibling response, which no ``response.create`` asked for.
+
+        This is what the service sends when the model emits an announcement and
+        a tool call in one completion: the spoken response finishes first, then
+        the call follows as the next response of the same turn.
+        """
+
+        fields = sibling_response_fields(generation)
+        events = [
+            ResponseCreatedEvent(**fields),
+            ResponseOutputFunctionCallDoneEvent(
+                **fields,
+                call_id="call_add_1",
+                name="add_numbers",
+                arguments='{"a":19,"b":23}',
+            ),
+            # Zero usage on purpose: the spoken response already billed the one
+            # generation both halves came out of.
+            ResponseDoneEvent(
+                **fields,
+                status=ResponseStatus.COMPLETED,
+                reason=ResponseReason.TOOL_CALL,
+                usage=Usage(),
+            ),
+        ]
         for event in events:
             await websocket.send_str(event.model_dump_json())
 
@@ -911,6 +967,114 @@ async def test_agent_session_executes_native_tool_and_requests_final_reply(
         assert len(outputs) == 1
         assert outputs[0].call_id == "call_add_1"
         assert outputs[0].output == "42"
+        assert server._response_count == 2
+    finally:
+        await agent_session.aclose()
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_mixed_output_arrives_as_a_spoken_response_and_a_call_only_sibling(
+    unused_tcp_port: int,
+) -> None:
+    """Two sequential responses of one turn reach the caller intact.
+
+    Nothing in this plugin was changed for mixed model output — the service
+    splits it. Whether the split survives the client is therefore an assumption
+    until it is asserted here, and the sibling is the hard part: no
+    ``response.create`` asks for it, so it arrives unsolicited while the plugin
+    is mid-turn.
+    """
+
+    @function_tool
+    async def add_numbers(a: int, b: int) -> str:
+        """Add two integers."""
+
+        return str(a + b)
+
+    server = ContractServer(unused_tcp_port, send_transcription=False, mixed_output=True)
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    session = model.session()
+    generations: list[Any] = []
+    sibling_arrived = asyncio.Event()
+
+    def on_generation_created(generation: Any) -> None:
+        generations.append(generation)
+        if len(generations) > 1:
+            sibling_arrived.set()
+
+    session.on("generation_created", on_generation_created)
+    try:
+        await session.update_tools([add_numbers])
+        spoken = await asyncio.wait_for(session.generate_reply(), timeout=1.0)
+        message = await anext(spoken.message_stream.__aiter__())
+        assert "".join([delta async for delta in message.text_stream]) == "Guten Tag. "
+        assert len([frame async for frame in message.audio_stream]) == 1
+        assert [call async for call in spoken.function_stream] == []
+
+        await asyncio.wait_for(sibling_arrived.wait(), timeout=1.0)
+        sibling = generations[1]
+        # Unsolicited, so the framework must not attribute it to a request.
+        assert sibling.user_initiated is False
+        assert sibling.response_id != spoken.response_id
+        calls = [call async for call in sibling.function_stream]
+        assert len(calls) == 1
+        assert calls[0].name == "add_numbers"
+        assert calls[0].arguments == '{"a":19,"b":23}'
+        assert [message async for message in sibling.message_stream] == []
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_session_survives_mixed_output_and_still_runs_the_tool(
+    unused_tcp_port: int,
+) -> None:
+    """The case that killed a real call: announcement first, then the call.
+
+    The old service refused mixed output, the plugin raised a non-recoverable
+    protocol error and the ``AgentSession`` closed. Here the announcement is
+    spoken, the tool runs, and the session lives long enough to ask for the
+    final reply — which is what a second ``response.create`` proves.
+    """
+
+    @function_tool
+    async def add_numbers(a: int, b: int) -> str:
+        """Add two integers."""
+
+        return str(a + b)
+
+    server = ContractServer(unused_tcp_port, send_transcription=False, mixed_output=True)
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    agent_session: AgentSession[dict[str, Any]] = AgentSession(llm=model)
+    executed = asyncio.Event()
+    agent_session.on("function_tools_executed", lambda event: executed.set())
+    try:
+        await agent_session.start(
+            agent=Agent(instructions="Use the tool.", tools=[add_numbers]), record=False
+        )
+        handle = agent_session.generate_reply(user_input="Was gibt es in München zu sehen?")
+        await asyncio.wait_for(handle, timeout=3.0)
+        await asyncio.wait_for(executed.wait(), timeout=2.0)
+        # Wait for the event rather than draining the queue: the tool result is
+        # sent after ``function_tools_executed`` fires, so draining races it.
+        outputs: list[Any] = []
+        while not outputs:
+            event = await asyncio.wait_for(
+                wait_client_event(server, "conversation.item.create"), timeout=2.0
+            )
+            assert isinstance(event, ConversationItemCreateEvent)
+            if event.item.type == "function_call_output":
+                outputs.append(event.item)
+        assert len(outputs) == 1
+        assert outputs[0].call_id == "call_add_1"
+        assert outputs[0].output == "42"
+        # One for the reply, one for the continuation after the tool result. The
+        # sibling is not counted: the server pushed it without being asked.
         assert server._response_count == 2
     finally:
         await agent_session.aclose()
