@@ -33,7 +33,7 @@ def test_default_config_matches_fixed_audio_and_capacity_contract() -> None:
     assert "native German speaker" in rendered
     assert "Keep the speaker identity unchanged across every utterance" in rendered
     assert settings.speech.generation.do_sample is True
-    assert settings.transcription.partial_enabled is True
+    assert settings.transcription.partial_enabled is False
     assert settings.transcription.partial_interval_ms == 500
     assert settings.transcription.partial_max_audio_ms == 4_000
     assert settings.speech.segmentation.first_segment_max_characters == 72
@@ -101,7 +101,7 @@ def test_complete_version_03_profiles_validate(
     assert settings.server.max_sessions == sessions
     assert settings.models.llama_parallel_slots == sessions
     assert settings.tts.worker_count == workers
-    assert settings.transcription.partial_enabled is True
+    assert settings.transcription.partial_enabled is False
     assert settings.transcription.partial_interval_ms == 500
 
 
@@ -338,3 +338,23 @@ def test_reference_transcripts_are_identical_across_code_yaml_and_recordings() -
             assert reference.text == code.voices[voice_id].refs[language].text
             assert reference.text == recorded[(voice_id, language)]
             assert reference.audio == code.voices[voice_id].refs[language].audio
+
+
+def test_swa_full_cannot_be_combined_with_a_context_that_blows_the_vram_budget() -> None:
+    """--swa-full sizes the KV cache to the full context, so the two are coupled.
+
+    At 32768 tokens that is roughly 31 GiB on a card this service shares with
+    five other tenants; at 16384 it is about half. The limit lives here rather
+    than in a comment so the combination cannot be configured by accident.
+    """
+    assert ServiceSettings().models.llama_swa_full is False
+
+    allowed = ServiceSettings(
+        models={"llama_swa_full": True, "llama_context_size": 16_384}  # type: ignore[arg-type]
+    )
+    assert allowed.models.llama_swa_full is True
+
+    with pytest.raises(ValidationError, match="16384"):
+        ServiceSettings(
+            models={"llama_swa_full": True, "llama_context_size": 32_768}  # type: ignore[arg-type]
+        )

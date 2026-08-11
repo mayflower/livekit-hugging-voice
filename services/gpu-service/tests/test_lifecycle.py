@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import importlib.metadata
 import wave
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -17,11 +18,13 @@ from hugging_voice_service.config import (
     ServiceSettings,
     SpeechSettings,
 )
-from hugging_voice_service.lifecycle import LifecyclePhase, ServiceLifecycle
+from hugging_voice_service.lifecycle import LifecyclePhase, ServiceLifecycle, _gemma_factory
 from hugging_voice_service.llama_process import LlamaProcessState
+from hugging_voice_service.llm_profiles import resolve_llm_profile
 from hugging_voice_service.model_manifest import LockedFile, LockedModel, ModelLock, render_lock
 from hugging_voice_service.realtime import RealtimeService
 from hugging_voice_service.runtimes.smart_turn import SmartTurnResult
+from hugging_voice_service.telemetry import ServiceTelemetry
 
 REVISION = "a" * 40
 
@@ -230,7 +233,7 @@ async def test_lifecycle_loads_each_runtime_once_and_reports_real_readiness(
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: parakeet,
         qwen_factory=lambda talker, codec, speech, tts: qwen,
-        gemma_factory=lambda port, slots, profile, violation: gemma,
+        gemma_factory=lambda port, slots, profile, violation, mixed: gemma,
         smart_turn_factory=lambda model: smart_turn,
         gpu_memory_probe=lambda: 123_456,
     )
@@ -385,7 +388,7 @@ async def test_warmup_failure_cleans_started_resources_and_stays_unready(
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: parakeet,
         qwen_factory=lambda talker, codec, speech, tts: qwen,
-        gemma_factory=lambda port, slots, profile, violation: FakeGemma(),
+        gemma_factory=lambda port, slots, profile, violation, mixed: FakeGemma(),
     )
     await lifecycle.start()
     assert lifecycle.phase is LifecyclePhase.FAILED
@@ -433,7 +436,7 @@ async def test_unexpected_llama_exit_immediately_revokes_readiness(
         llama_factory=lambda binary, model, config: llama,
         parakeet_factory=lambda checkpoint: FakeBlockingRuntime(),
         qwen_factory=lambda talker, codec, speech, tts: FakeBlockingRuntime(),
-        gemma_factory=lambda port, slots, profile, violation: FakeGemma(),
+        gemma_factory=lambda port, slots, profile, violation, mixed: FakeGemma(),
     )
     await lifecycle.start()
     assert lifecycle.phase.value == LifecyclePhase.READY.value
@@ -516,7 +519,7 @@ async def test_talker_artifact_follows_the_configured_tts_mode(
             llama_factory=lambda binary, model, config: FakeLlama(),
             parakeet_factory=lambda checkpoint: FakeBlockingRuntime(),
             qwen_factory=qwen_factory,
-            gemma_factory=lambda port, slots, profile, violation: FakeGemma(),
+            gemma_factory=lambda port, slots, profile, violation, mixed: FakeGemma(),
             gpu_memory_probe=lambda: 0,
         )
         await lifecycle.start()
@@ -526,3 +529,65 @@ async def test_talker_artifact_follows_the_configured_tts_mode(
 
     assert await selected_talker("voice_clone") == "qwen-talker-1.7b-base-BF16.gguf"
     assert await selected_talker("voice_design") == "qwen-talker-1.7b-voicedesign-BF16.gguf"
+
+
+@pytest.mark.asyncio
+async def test_gemma_reports_mixed_output_violations_by_direction(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The two mixing shapes are handled differently, so they must be counted apart."""
+    monkeypatch.setattr(importlib.metadata, "version", lambda package: "6.2.1")
+    settings = make_settings_and_lock(tmp_path)
+    reports: list[Callable[[str], None]] = []
+
+    def gemma_factory(
+        port: int,
+        slots: int,
+        profile: object,
+        violation: Callable[[], None],
+        mixed_output: Callable[[str], None],
+    ) -> FakeGemma:
+        del port, slots, profile, violation
+        reports.append(mixed_output)
+        return FakeGemma()
+
+    lifecycle = ServiceLifecycle(
+        settings,
+        cuda_probe=lambda: None,
+        llama_factory=lambda binary, model, config: FakeLlama(),
+        parakeet_factory=lambda checkpoint: FakeBlockingRuntime(),
+        qwen_factory=lambda talker, codec, speech, tts: FakeBlockingRuntime(),
+        gemma_factory=gemma_factory,
+        gpu_memory_probe=lambda: 0,
+    )
+    await lifecycle.start()
+    assert lifecycle.ready, lifecycle.error
+
+    report = reports[0]
+    report("text_then_tool")
+    report("text_then_tool")
+    report("tool_then_text")
+    metrics = lifecycle.telemetry.render().decode()
+    assert 'hugging_voice_mixed_output_violations_total{direction="text_then_tool"} 2.0' in metrics
+    assert 'hugging_voice_mixed_output_violations_total{direction="tool_then_text"} 1.0' in metrics
+    await lifecycle.aclose()
+
+
+def test_default_gemma_factory_forwards_the_mixed_output_callback() -> None:
+    """The production factory, not just the injected fake, must carry the callback."""
+    telemetry = ServiceTelemetry()
+    runtime = _gemma_factory(
+        8_080,
+        4,
+        resolve_llm_profile("compat_gemma31"),
+        telemetry.reasoning_violations.inc,
+        lambda direction: telemetry.mixed_output_violations.labels(direction=direction).inc(),
+    )
+
+    runtime._report_mixed_output("tool_then_text")
+
+    assert runtime.mixed_output_violations == 1
+    assert (
+        'hugging_voice_mixed_output_violations_total{direction="tool_then_text"} 1.0'
+        in telemetry.render().decode()
+    )

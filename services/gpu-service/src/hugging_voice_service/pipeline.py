@@ -9,7 +9,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -1096,12 +1096,20 @@ class VoicePipeline:
         speech_stopped_at: float | None = None,
         speech_ended_at: float | None = None,
         direct_text: str | None = None,
+        pending_tool_call: ToolCall | None = None,
         source_event_id: str | None = None,
     ) -> None:
         if self._response is not None:
             if direct_text is None and self._response.direct_speak:
                 if self._deferred_response_task is not None:
-                    raise ValueError("a response is already deferred for this session")
+                    # Structured, so consume() answers with an error event rather
+                    # than letting a bare ValueError end the session. The slot is
+                    # shared with the tool call of a mixed generation, so a client
+                    # request can now genuinely find it taken.
+                    raise PipelineEventError(
+                        ErrorCode.SESSION_STATE_CONFLICT,
+                        "a response is already deferred for this session",
+                    )
                 self._deferred_response_task = asyncio.create_task(
                     self._start_response_after_direct_speak(
                         response_instructions=response_instructions,
@@ -1187,11 +1195,121 @@ class VoicePipeline:
                 **self._response_fields(context),
             )
         )
-        self._response_task = asyncio.create_task(
-            self._run_response(context)
-            if direct_text is None
-            else self._run_speak_response(context, direct_text)
+        runner: Coroutine[Any, Any, None]
+        if pending_tool_call is not None:
+            runner = self._run_tool_call_response(context, pending_tool_call)
+        elif direct_text is None:
+            runner = self._run_response(context)
+        else:
+            runner = self._run_speak_response(context, direct_text)
+        self._response_task = asyncio.create_task(runner)
+
+    def _turn_is_current(self, context: ResponseContext) -> bool:
+        return (self.state.current_turn_id, self.state.current_turn_revision) == (
+            context.turn_id,
+            context.turn_revision,
         )
+
+    def _defer_tool_call_response(self, context: ResponseContext, call: ToolCall) -> None:
+        """Queue the call of a mixed generation as the next response of this turn."""
+        if self._draining or self._deferred_response_task is not None:
+            self._telemetry.tool_call_rejections.inc()
+            logger.warning(
+                "tool_call_deferral_rejected",
+                extra={
+                    "session_id": self.state.session_id,
+                    "turn_id": context.turn_id,
+                    "generation_id": context.generation_id,
+                    "call_id": call.call_id,
+                    "tool_name": call.name,
+                    "draining": self._draining,
+                },
+            )
+            return
+        self._deferred_response_task = asyncio.create_task(
+            self._start_tool_call_response(context, call)
+        )
+
+    async def _start_tool_call_response(self, context: ResponseContext, call: ToolCall) -> None:
+        """Start the call-only sibling response once the spoken one is finished.
+
+        Between the two responses the generation token is already finished, so
+        cancellation state cannot answer whether the call is still wanted. The
+        turn identity can, and it is rechecked after the wait because a barge-in
+        lands exactly in that window.
+        """
+        try:
+            if not self._turn_is_current(context):
+                self._telemetry.tool_call_rejections.inc()
+                return
+            await self._response_idle.wait()
+            if self._draining or not self._turn_is_current(context) or self._response is not None:
+                self._telemetry.tool_call_rejections.inc()
+                return
+            # No send_error on this path: the client reports service errors as
+            # non-recoverable and the AgentSession closes on the first one. A
+            # conflict may cost the call, never the session.
+            await self._start_response(
+                response_instructions="",
+                tools=context.tools,
+                tool_choice=context.tool_choice,
+                speech_stopped_at=context.speech_stopped_at,
+                speech_ended_at=context.speech_ended_at,
+                pending_tool_call=call,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self._telemetry.tool_call_rejections.inc()
+            logger.exception(
+                "tool_call_deferral_failed",
+                extra={
+                    "session_id": self.state.session_id,
+                    "turn_id": context.turn_id,
+                    "generation_id": context.generation_id,
+                    "call_id": call.call_id,
+                    "tool_name": call.name,
+                },
+            )
+        finally:
+            self._deferred_response_task = None
+
+    async def _run_tool_call_response(self, context: ResponseContext, call: ToolCall) -> None:
+        try:
+            if not self.state.cancellation.is_current(context.token):
+                self._telemetry.stale_chunks_dropped.inc()
+                raise asyncio.CancelledError
+            await self._emit_tool_call(context, call)
+        except asyncio.CancelledError:
+            await self._finalize_response(
+                context,
+                status=ResponseStatus.CANCELLED,
+                reason=context.cancel_reason,
+            )
+        except Exception:
+            logger.exception(
+                "tool_call_response_failed",
+                extra={
+                    "session_id": self.state.session_id,
+                    "turn_id": context.turn_id,
+                    "generation_id": context.generation_id,
+                    "response_id": context.response_id,
+                    "call_id": call.call_id,
+                    "tool_name": call.name,
+                },
+            )
+            await self._finalize_response(
+                context,
+                status=ResponseStatus.FAILED,
+                reason=ResponseReason.MODEL_ERROR,
+            )
+        finally:
+            if self._response is context:
+                self._response = None
+                self._response_task = None
+                self.state.current_generation_id = None
+                self.state.current_response_id = None
+                self._response_idle.set()
 
     async def _start_response_after_direct_speak(
         self,
@@ -1341,8 +1459,8 @@ class VoicePipeline:
                     context.usage = event
                     continue
                 if isinstance(event, ToolCall):
-                    if context.text or function_call is not None:
-                        raise ValueError("Gemma emitted mixed or multiple tool output")
+                    if function_call is not None:
+                        raise ValueError("Gemma emitted multiple tool calls")
                     function_call = event
                     self._telemetry.tool_decision_seconds.observe(
                         time.monotonic() - context.started_at
@@ -1366,48 +1484,8 @@ class VoicePipeline:
                 )
                 for segment in segmenter.feed(event.text):
                     await segments.put(segment)
-            if function_call is not None:
-                pending = FunctionCallConversationItem(
-                    id=context.item_id,
-                    call_id=function_call.call_id,
-                    name=function_call.name,
-                    arguments=function_call.arguments,
-                    turn_id=context.turn_id,
-                    turn_revision=context.turn_revision,
-                    generation_id=context.generation_id,
-                    response_id=context.response_id,
-                )
-                self.state.pending_call = pending
-                self.state.pending_call_emitted_at = time.monotonic()
-                self._telemetry.tool_call_generations.inc()
-                logger.info(
-                    "tool_call_emitted",
-                    extra={
-                        "session_id": self.state.session_id,
-                        "turn_id": context.turn_id,
-                        "generation_id": context.generation_id,
-                        "response_id": context.response_id,
-                        "call_id": pending.call_id,
-                        "tool_name": pending.name,
-                        "argument_size": len(pending.arguments),
-                        "duration_seconds": round(
-                            self.state.pending_call_emitted_at - context.started_at, 3
-                        ),
-                    },
-                )
-                await self.state.transport.send(
-                    ResponseOutputFunctionCallDoneEvent(
-                        **self._response_fields(context),
-                        call_id=pending.call_id,
-                        name=pending.name,
-                        arguments=pending.arguments,
-                    )
-                )
-                await self._finalize_response(
-                    context,
-                    status=ResponseStatus.COMPLETED,
-                    reason=ResponseReason.TOOL_CALL,
-                )
+            if function_call is not None and not context.text:
+                await self._emit_tool_call(context, function_call)
                 return
             for segment in segmenter.flush():
                 await segments.put(segment)
@@ -1428,11 +1506,29 @@ class VoicePipeline:
                     role="assistant",
                     content=context.text,
                 )
+            if function_call is not None:
+                # The model announced the lookup and appended the call to the
+                # same generation. The announcement has just been spoken as a
+                # message response; the call follows as a second response of the
+                # same turn, so neither response carries both sorts.
+                logger.info(
+                    "tool_call_deferred_after_text",
+                    extra={
+                        "session_id": self.state.session_id,
+                        "turn_id": context.turn_id,
+                        "generation_id": context.generation_id,
+                        "response_id": context.response_id,
+                        "call_id": function_call.call_id,
+                        "tool_name": function_call.name,
+                        "announcement_size": len(context.text),
+                    },
+                )
+                self._defer_tool_call_response(context, function_call)
         except asyncio.CancelledError:
             if tts_task is not None:
                 tts_task.cancel()
                 await asyncio.gather(tts_task, return_exceptions=True)
-            if function_call is None:
+            if function_call is None or tts_task is not None:
                 await self._send_text_done(context)
                 await self._send_audio_done(context)
             await self._finalize_response(
@@ -1460,7 +1556,7 @@ class VoicePipeline:
                 (exc.code if isinstance(exc, ToolCallValidationError) else ErrorCode.MODEL_FAILURE),
                 str(exc) or type(exc).__name__,
             )
-            if function_call is None:
+            if function_call is None or tts_task is not None:
                 await self._send_text_done(context)
                 await self._send_audio_done(context)
             await self._finalize_response(
@@ -1477,6 +1573,50 @@ class VoicePipeline:
                 self.state.current_generation_id = None
                 self.state.current_response_id = None
                 self._response_idle.set()
+
+    async def _emit_tool_call(self, context: ResponseContext, call: ToolCall) -> None:
+        """Commit one validated call as the terminal output of a tool response."""
+        pending = FunctionCallConversationItem(
+            id=context.item_id,
+            call_id=call.call_id,
+            name=call.name,
+            arguments=call.arguments,
+            turn_id=context.turn_id,
+            turn_revision=context.turn_revision,
+            generation_id=context.generation_id,
+            response_id=context.response_id,
+        )
+        self.state.pending_call = pending
+        self.state.pending_call_emitted_at = time.monotonic()
+        self._telemetry.tool_call_generations.inc()
+        logger.info(
+            "tool_call_emitted",
+            extra={
+                "session_id": self.state.session_id,
+                "turn_id": context.turn_id,
+                "generation_id": context.generation_id,
+                "response_id": context.response_id,
+                "call_id": pending.call_id,
+                "tool_name": pending.name,
+                "argument_size": len(pending.arguments),
+                "duration_seconds": round(
+                    self.state.pending_call_emitted_at - context.started_at, 3
+                ),
+            },
+        )
+        await self.state.transport.send(
+            ResponseOutputFunctionCallDoneEvent(
+                **self._response_fields(context),
+                call_id=pending.call_id,
+                name=pending.name,
+                arguments=pending.arguments,
+            )
+        )
+        await self._finalize_response(
+            context,
+            status=ResponseStatus.COMPLETED,
+            reason=ResponseReason.TOOL_CALL,
+        )
 
     async def _run_tts(
         self,

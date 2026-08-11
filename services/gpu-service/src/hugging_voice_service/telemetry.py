@@ -30,6 +30,12 @@ class ServiceTelemetry:
             "Reasoning fields or leading thinking blocks suppressed from visible output",
             registry=self.registry,
         )
+        self.mixed_output_violations = Counter(
+            "hugging_voice_mixed_output_violations_total",
+            "Generations that mixed visible text and a tool call, by mixing direction",
+            ("direction",),
+            registry=self.registry,
+        )
         self.tool_call_generations = Counter(
             "hugging_voice_tool_call_generations_total",
             "Completed structured Gemma tool-call generations",

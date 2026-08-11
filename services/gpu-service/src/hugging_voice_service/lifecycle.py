@@ -127,7 +127,9 @@ class ManagedSmartTurn(Protocol):
 LlamaFactory = Callable[[Path, Path, ServiceSettings], ManagedLlama]
 ParakeetFactory = Callable[[Path], ManagedParakeet]
 QwenFactory = Callable[[Path, Path | None, SpeechSettings, TTSSettings], ManagedQwen]
-GemmaFactory = Callable[[int, int, LLMProfile, Callable[[], None]], ManagedGemma]
+GemmaFactory = Callable[
+    [int, int, LLMProfile, Callable[[], None], Callable[[str], None]], ManagedGemma
+]
 SmartTurnFactory = Callable[[Path], ManagedSmartTurn]
 CudaProbe = Callable[[], None]
 GpuMemoryProbe = Callable[[], int]
@@ -159,6 +161,7 @@ def _llama_factory(binary: Path, model: Path, settings: ServiceSettings) -> Llam
         parallel_slots=settings.models.llama_parallel_slots,
         context_size=settings.models.llama_context_size,
         flash_attention=settings.models.llama_flash_attention,
+        swa_full=settings.models.llama_swa_full,
         continuous_batching=settings.models.llama_continuous_batching,
         batch_size=settings.models.llama_batch_size,
         ubatch_size=settings.models.llama_ubatch_size,
@@ -176,12 +179,14 @@ def _gemma_factory(
     parallel_slots: int,
     profile: LLMProfile,
     violation: Callable[[], None],
+    mixed_output: Callable[[str], None],
 ) -> LlamaCppChatRuntime:
     return LlamaCppChatRuntime(
         port=port,
         profile=profile,
         parallel_slots=parallel_slots,
         reasoning_violation=violation,
+        mixed_output_violation=mixed_output,
     )
 
 
@@ -368,6 +373,9 @@ class ServiceLifecycle:
                     self.settings.models.llama_parallel_slots,
                     resolve_llm_profile(self.settings.models.llm_profile),
                     self.telemetry.reasoning_violations.inc,
+                    lambda direction: self.telemetry.mixed_output_violations.labels(
+                        direction=direction
+                    ).inc(),
                 )
                 await self.gemma.warmup()
 

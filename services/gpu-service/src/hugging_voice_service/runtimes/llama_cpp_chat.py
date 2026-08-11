@@ -284,6 +284,7 @@ class LlamaCppChatRuntime:
         request_timeout: float = 120.0,
         idle_timeout: float = 30.0,
         reasoning_violation: Callable[[], None] | None = None,
+        mixed_output_violation: Callable[[str], None] | None = None,
     ) -> None:
         if not 1 <= parallel_slots <= 64:
             raise ValueError("parallel_slots must be between 1 and 64")
@@ -298,6 +299,8 @@ class LlamaCppChatRuntime:
         self._semaphore = asyncio.Semaphore(parallel_slots)
         self._reasoning_violation = reasoning_violation
         self.reasoning_violations = 0
+        self._mixed_output_violation = mixed_output_violation
+        self.mixed_output_violations = 0
 
     async def warmup(self) -> None:
         visible = ""
@@ -400,6 +403,8 @@ class LlamaCppChatRuntime:
             tool_call = _ToolCallAccumulator()
             reasoning_reported = False
             visible_seen = False
+            mixed_reported = False
+            tool_call_broken = False
             try:
                 response = await session.post(
                     f"{self._base_url}/v1/chat/completions",
@@ -436,13 +441,27 @@ class LlamaCppChatRuntime:
                         continue
                     delta = choices[0].get("delta") or {}
                     chunks = delta.get("tool_calls")
-                    if chunks:
+                    if chunks and not tool_call_broken:
+                        # Gemma announces the lookup and appends the call to the
+                        # same completion. That used to abort the whole session;
+                        # now the pipeline splits it into two responses, so the
+                        # caller hears the announcement and the tool still runs.
+                        if visible_seen and not mixed_reported:
+                            self._report_mixed_output("text_then_tool")
+                            mixed_reported = True
                         if visible_seen:
-                            raise ToolCallValidationError(
-                                "model mixed visible text and a tool call",
-                                code=ErrorCode.MIXED_MESSAGE_AND_TOOL_OUTPUT,
-                            )
-                        tool_call.push(chunks)
+                            # Text is already on the wire and cannot be recalled.
+                            # A call that fails validation must therefore cost
+                            # only itself, not the words the caller already heard.
+                            # ValueError belongs in the catch: canonical_json
+                            # rejects non-finite numbers with a bare one, and
+                            # json.loads lets NaN through to reach it.
+                            try:
+                                tool_call.push(chunks)
+                            except (ToolCallValidationError, ValueError):
+                                tool_call_broken = True
+                        else:
+                            tool_call.push(chunks)
                     if delta.get("reasoning_content"):
                         if not reasoning_reported:
                             self._report_reasoning_violation()
@@ -454,18 +473,42 @@ class LlamaCppChatRuntime:
                         reasoning_reported = True
                     if visible:
                         if tool_call.present:
-                            raise ToolCallValidationError(
-                                "model mixed a tool call and visible text",
-                                code=ErrorCode.MIXED_MESSAGE_AND_TOOL_OUTPUT,
-                            )
+                            # Trailing text comments on a result that does not
+                            # exist yet. Nothing is on the wire, so dropping it
+                            # keeps the pure tool turn byte-identical to before.
+                            if not mixed_reported:
+                                self._report_mixed_output("tool_then_text")
+                                mixed_reported = True
+                            continue
                         visible_seen = True
                         yield TextDelta(visible)
-                if tool_call.present:
-                    yield tool_call.finish(tools=tools, tool_choice=tool_choice)
-                elif tool_choice == "required":
+                if tool_call.present and not tool_call_broken:
+                    if visible_seen:
+                        # Only the accumulator call belongs in the try. Wrapping
+                        # the yield too would also swallow whatever a consumer
+                        # throws in at that suspension point.
+                        finished: ToolCall | None
+                        try:
+                            finished = tool_call.finish(tools=tools, tool_choice=tool_choice)
+                        except (ToolCallValidationError, ValueError):
+                            # Raising is not an option: the caller already heard
+                            # the announcement, so the turn ends spoken but
+                            # without the lookup. The generation is already
+                            # counted as a mixed-output violation, which is the
+                            # signal to watch. No flag is set here on purpose —
+                            # the generation is over and nothing would read it.
+                            finished = None
+                        if finished is not None:
+                            yield finished
+                    else:
+                        yield tool_call.finish(tools=tools, tool_choice=tool_choice)
+                elif tool_choice == "required" and not tool_call.present:
                     raise ToolCallValidationError(
                         "model did not emit a tool call with tool_choice='required'"
                     )
+                # ``tool_choice="required"`` cannot be honoured once a call has
+                # been discarded either; it is used only by the startup readiness
+                # probe, which never speaks first.
             except asyncio.CancelledError:
                 if response is not None:
                     response.close()
@@ -508,3 +551,14 @@ class LlamaCppChatRuntime:
         self.reasoning_violations += 1
         if self._reasoning_violation is not None:
             self._reasoning_violation()
+
+    def _report_mixed_output(self, direction: str) -> None:
+        """Record that the model mixed a message and a tool call in one generation.
+
+        Tolerated rather than fatal, exactly like a reasoning leak: the model is
+        misbehaving, the call is not. ``direction`` distinguishes the two shapes
+        because they are handled differently — see ``stream_response``.
+        """
+        self.mixed_output_violations += 1
+        if self._mixed_output_violation is not None:
+            self._mixed_output_violation(direction)
