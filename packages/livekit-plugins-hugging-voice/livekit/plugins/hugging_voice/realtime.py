@@ -282,7 +282,15 @@ class RealtimeModel(LiveKitRealtimeModel):
     def base_urls(self) -> tuple[str, ...]:
         return self._resolver.configured_urls
 
-    def session(self) -> RealtimeSession:
+    def session(self, *, turn_detection_disabled: bool = False) -> RealtimeSession:
+        """Create a session.
+
+        ``turn_detection_disabled`` is part of the LiveKit RealtimeModel
+        contract since livekit-agents 1.6.8. The service always runs its own
+        server-side VAD, so this model never reports
+        ``can_disable_turn_detection`` and the argument is accepted but not
+        honoured -- which is what the contract prescribes for such plugins.
+        """
         if self._closed:
             raise RuntimeError("RealtimeModel is closed")
         session = RealtimeSession(self)
