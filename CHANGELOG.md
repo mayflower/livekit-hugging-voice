@@ -8,6 +8,9 @@
   German only; `en`, `fr`, and `it` reuse it and inherit a German accent.
   `benchmarks/generate_voice_refs.py` now refuses to regenerate externally
   sourced recordings.
+- Add `benchmarks/voice_clone_audition.py`, which auditions voices through the
+  production `voice_clone` path instead of through their VoiceDesign
+  descriptions.
 - Expose `hugging_voice_build_info` with the version and the llama.cpp cache
   settings that decide whether a prompt prefix survives between turns, so two
   deployments are distinguishable in a metrics scrape.

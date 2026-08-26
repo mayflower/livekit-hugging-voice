@@ -49,6 +49,28 @@ Two consequences follow from it being a real recording:
 The transcript must match the audio word for word — it anchors the in-context
 clone, and a paraphrase makes the voice drift.
 
+## Auditioning what a caller actually hears
+
+`benchmarks/voice_audition.py` renders the VoiceDesign *descriptions*. Under
+`voice_clone` the description never reaches the model, so that script answers
+the wrong question. `benchmarks/voice_clone_audition.py` calls the same
+`generate_voice_clone_streaming` the service calls, with the packaged
+references, the base talker, and the deployed profile's chunk size:
+
+```bash
+uv run --extra gpu python benchmarks/voice_clone_audition.py \
+  --model-root .models --lock models/manifest.lock.json \
+  --output-dir benchmarks/reports/clone-audition --only-voice thorsten
+```
+
+Both scripts share a sentence corpus, so their outputs are comparable by ear.
+
+This is not optional for an externally sourced recording. A clip validated
+against one talker, one quantisation, and one backend is evidence for another
+combination, not proof of it — and the shipped profile
+(`compat_qwen3_tts_1_7b_ggml`, 1.7B GGML, `chunk_size: 12`) is not the one most
+such clips were auditioned on.
+
 Per-session style instructions are honored only in `voice_design` mode, where
 they are appended to the fixed description and explicitly scoped to delivery.
 In `voice_clone` mode the frozen recording fully defines the speaker, so style
