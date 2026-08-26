@@ -211,6 +211,16 @@ _REFERENCE_TEXTS: dict[str, str] = {
 }
 
 
+# Transcript of thorsten.de.wav, word for word. Voice cloning drifts when the
+# transcript and the recording disagree, so this must never be paraphrased.
+# Provenance is recorded in voice_refs/metadata.json and THIRD_PARTY.md.
+_THORSTEN_DE_TEXT = (
+    "Die Leopoldina gilt als älteste naturwissenschaftlich-medizinische "
+    "Gelehrtengesellschaft in Deutschland. Die derzeitigen Geschehnisse im "
+    "Mittelmeer finden Wissenschaftler ungewöhnlich und besorgniserregend."
+)
+
+
 def _default_voice(voice_id: str, instructions: str) -> VoiceSettings:
     return VoiceSettings(
         instructions=instructions,
@@ -218,6 +228,33 @@ def _default_voice(voice_id: str, instructions: str) -> VoiceSettings:
             language: VoiceReference(audio=f"{voice_id}.{language}.wav", text=text)
             for language, text in _REFERENCE_TEXTS.items()
         },
+    )
+
+
+# Voices whose recording came from outside this repository instead of from a
+# VoiceDesign rendering of their own instructions. They are exempt from the
+# ``{voice_id}.{language}.wav`` naming convention, and benchmarks that
+# regenerate references must skip them rather than overwrite a licensed human
+# recording with synthetic audio.
+EXTERNALLY_SOURCED_VOICES = frozenset({"thorsten"})
+
+
+def _shared_reference_voice(instructions: str, audio: str, text: str) -> VoiceSettings:
+    """A voice whose every language points at one externally sourced recording.
+
+    The five designed voices carry a separate rendering per language, named
+    ``{voice_id}.{language}.wav``. A real human recording exists in one language
+    only, so every language reuses it: cross-lingual in-context cloning keeps
+    the speaker identity and lets the target text and language token drive the
+    output. The trade-off is an audible accent outside the recording's own
+    language, which is why ``speech.default_language`` matters more for such a
+    voice than for a designed one.
+    """
+
+    reference = VoiceReference(audio=audio, text=text)
+    return VoiceSettings(
+        instructions=instructions,
+        refs=dict.fromkeys(_REFERENCE_TEXTS, reference),
     )
 
 
@@ -313,7 +350,7 @@ class LLMGenerationSettings(StrictConfig):
 
 class SpeechSettings(StrictConfig):
     default_language: str = Field(default="de", pattern=r"^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$")
-    default_voice: str = Field(default="warm_female", pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+    default_voice: str = Field(default="thorsten", pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
     # voice_clone drives the base talker with one frozen, operator-provided
     # reference recording per voice and language, so the perceived speaker stays
     # identical across segments and sessions. voice_design rebuilds the voice
@@ -393,6 +430,17 @@ class SpeechSettings(StrictConfig):
                     "A friendly androgynous adult native {language} speaker with authentic natural "
                     "pronunciation, expressive conversational prosody, and no foreign accent."
                 ),
+            ),
+            # The only voice cloned from a real human recording rather than
+            # from a rendering of its own instructions. German only; every
+            # other language reuses that recording. See _shared_reference_voice.
+            "thorsten": _shared_reference_voice(
+                (
+                    "A calm, natural adult male native {language} speaker with a measured "
+                    "reading pace, neutral warmth, clear articulation, and no foreign accent."
+                ),
+                "thorsten.de.wav",
+                _THORSTEN_DE_TEXT,
             ),
         },
         min_length=1,

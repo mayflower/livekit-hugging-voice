@@ -5,11 +5,27 @@ third-party software and model artifacts listed in `THIRD_PARTY.md`; their licen
 and notices continue to apply to those components.
 
 No model weights are vendored in this repository or copied into the runtime image.
+One audio artifact is: see "Voice reference recordings" below.
 The image builds a pinned llama.cpp binary and installs version-locked Python and
 CUDA runtime components; `THIRD_PARTY.md`, `uv.lock`, installed distribution
 metadata, upstream model licenses, and generated image digests are the release
 inventory. Redistributors remain responsible for preserving the license and notice
 files supplied by those packages, images, binaries, and separately fetched models.
+
+## Voice reference recordings
+
+The `voice_clone` reference recordings under
+`services/gpu-service/src/hugging_voice_service/voice_refs/` ship as package data.
+Five of the six voices were rendered by Qwen3-TTS from their own VoiceDesign
+descriptions and are output of an Apache-2.0 model.
+
+`thorsten.de.wav` is not: it is an excerpt from the
+`Thorsten-Voice/TV-44kHz-Full` dataset (config `TV-2022.10-Neutral`, speaker
+Thorsten Müller, dataset revision `2b61b98fa8f99abd1ce1587b4bf413d6ebc217d5`),
+released under **CC0-1.0**. CC0 waives copyright and requires neither attribution
+nor the passing on of this notice; the entry exists so the provenance of a
+vendored artifact stays auditable. Per-file details are in
+`voice_refs/metadata.json`.
 
 ## Pipecat Smart Turn
 

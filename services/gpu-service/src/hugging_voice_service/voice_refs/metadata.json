@@ -891,7 +891,110 @@
         }
       ],
       "sha256": "19dd1dd8660663b3c116b816bf2f4d9ba9c8321e76035d46dd0cb92bc021f74d"
+    },
+    {
+      "voice": "thorsten",
+      "language": "de",
+      "file": "thorsten.de.wav",
+      "text": "Die Leopoldina gilt als älteste naturwissenschaftlich-medizinische Gelehrtengesellschaft in Deutschland. Die derzeitigen Geschehnisse im Mittelmeer finden Wissenschaftler ungewöhnlich und besorgniserregend.",
+      "instruction": "",
+      "sample_rate": 24000,
+      "source": {
+        "kind": "external_recording",
+        "dataset": "Thorsten-Voice/TV-44kHz-Full",
+        "dataset_revision": "2b61b98fa8f99abd1ce1587b4bf413d6ebc217d5",
+        "dataset_config": "TV-2022.10-Neutral",
+        "speaker": "Thorsten Müller",
+        "microphone": "Rode Podcaster",
+        "license": "CC0-1.0",
+        "preparation": "Two sentences joined with a 0.25 s pause, edges trimmed at -40 dBFS, peak-normalised to 0.95, resampled to 24 kHz mono 16-bit.",
+        "measured": {
+          "duration_seconds": 11.647,
+          "mean_dbfs": -19.7,
+          "peak_dbfs": -0.4,
+          "halves_drift_db": 0.9
+        }
+      },
+      "sha256": "e8c15389d1aeb54fa326bf1df8af309097fd37e85b950f409f8f75945e35a5bf"
+    },
+    {
+      "voice": "thorsten",
+      "language": "en",
+      "file": "thorsten.de.wav",
+      "text": "Die Leopoldina gilt als älteste naturwissenschaftlich-medizinische Gelehrtengesellschaft in Deutschland. Die derzeitigen Geschehnisse im Mittelmeer finden Wissenschaftler ungewöhnlich und besorgniserregend.",
+      "instruction": "",
+      "sample_rate": 24000,
+      "source": {
+        "kind": "external_recording",
+        "dataset": "Thorsten-Voice/TV-44kHz-Full",
+        "dataset_revision": "2b61b98fa8f99abd1ce1587b4bf413d6ebc217d5",
+        "dataset_config": "TV-2022.10-Neutral",
+        "speaker": "Thorsten Müller",
+        "microphone": "Rode Podcaster",
+        "license": "CC0-1.0",
+        "preparation": "Two sentences joined with a 0.25 s pause, edges trimmed at -40 dBFS, peak-normalised to 0.95, resampled to 24 kHz mono 16-bit.",
+        "measured": {
+          "duration_seconds": 11.647,
+          "mean_dbfs": -19.7,
+          "peak_dbfs": -0.4,
+          "halves_drift_db": 0.9
+        }
+      },
+      "sha256": "e8c15389d1aeb54fa326bf1df8af309097fd37e85b950f409f8f75945e35a5bf",
+      "note": "Reuses the German recording. Cross-lingual in-context cloning keeps the speaker identity; the output carries a German accent."
+    },
+    {
+      "voice": "thorsten",
+      "language": "fr",
+      "file": "thorsten.de.wav",
+      "text": "Die Leopoldina gilt als älteste naturwissenschaftlich-medizinische Gelehrtengesellschaft in Deutschland. Die derzeitigen Geschehnisse im Mittelmeer finden Wissenschaftler ungewöhnlich und besorgniserregend.",
+      "instruction": "",
+      "sample_rate": 24000,
+      "source": {
+        "kind": "external_recording",
+        "dataset": "Thorsten-Voice/TV-44kHz-Full",
+        "dataset_revision": "2b61b98fa8f99abd1ce1587b4bf413d6ebc217d5",
+        "dataset_config": "TV-2022.10-Neutral",
+        "speaker": "Thorsten Müller",
+        "microphone": "Rode Podcaster",
+        "license": "CC0-1.0",
+        "preparation": "Two sentences joined with a 0.25 s pause, edges trimmed at -40 dBFS, peak-normalised to 0.95, resampled to 24 kHz mono 16-bit.",
+        "measured": {
+          "duration_seconds": 11.647,
+          "mean_dbfs": -19.7,
+          "peak_dbfs": -0.4,
+          "halves_drift_db": 0.9
+        }
+      },
+      "sha256": "e8c15389d1aeb54fa326bf1df8af309097fd37e85b950f409f8f75945e35a5bf",
+      "note": "Reuses the German recording. Cross-lingual in-context cloning keeps the speaker identity; the output carries a German accent."
+    },
+    {
+      "voice": "thorsten",
+      "language": "it",
+      "file": "thorsten.de.wav",
+      "text": "Die Leopoldina gilt als älteste naturwissenschaftlich-medizinische Gelehrtengesellschaft in Deutschland. Die derzeitigen Geschehnisse im Mittelmeer finden Wissenschaftler ungewöhnlich und besorgniserregend.",
+      "instruction": "",
+      "sample_rate": 24000,
+      "source": {
+        "kind": "external_recording",
+        "dataset": "Thorsten-Voice/TV-44kHz-Full",
+        "dataset_revision": "2b61b98fa8f99abd1ce1587b4bf413d6ebc217d5",
+        "dataset_config": "TV-2022.10-Neutral",
+        "speaker": "Thorsten Müller",
+        "microphone": "Rode Podcaster",
+        "license": "CC0-1.0",
+        "preparation": "Two sentences joined with a 0.25 s pause, edges trimmed at -40 dBFS, peak-normalised to 0.95, resampled to 24 kHz mono 16-bit.",
+        "measured": {
+          "duration_seconds": 11.647,
+          "mean_dbfs": -19.7,
+          "peak_dbfs": -0.4,
+          "halves_drift_db": 0.9
+        }
+      },
+      "sha256": "e8c15389d1aeb54fa326bf1df8af309097fd37e85b950f409f8f75945e35a5bf",
+      "note": "Reuses the German recording. Cross-lingual in-context cloning keeps the speaker identity; the output carries a German accent."
     }
   ],
-  "review_note": "Listen to every recording before committing it as package data; these files freeze the public speaker identities."
+  "review_note": "Listen to every recording before committing it as package data; these files freeze the public speaker identities. The thorsten artifacts are not renderings: they point at an externally sourced CC0 human recording and must never be regenerated (see EXTERNALLY_SOURCED_VOICES in benchmarks/generate_voice_refs.py)."
 }

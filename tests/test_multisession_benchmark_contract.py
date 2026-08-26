@@ -96,6 +96,7 @@ class BenchmarkContractServer:
                 llama_slot_id=index,
                 supported_languages=("de", "en", "fr", "it"),
                 supported_voices=(
+                    "thorsten",
                     "warm_female",
                     "clear_female",
                     "warm_male",

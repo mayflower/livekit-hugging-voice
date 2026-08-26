@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from hugging_voice_service.config import (
+    EXTERNALLY_SOURCED_VOICES,
     SegmentationSettings,
     ServiceSettings,
     SpeechSettings,
@@ -56,10 +57,29 @@ def test_default_config_matches_fixed_audio_and_capacity_contract() -> None:
     for voice_id, voice in settings.speech.voices.items():
         assert set(voice.refs) == set(settings.speech.languages)
         for language_id, reference in voice.refs.items():
-            assert reference.audio == f"{voice_id}.{language_id}.wav"
             assert reference.text
+            if voice_id in EXTERNALLY_SOURCED_VOICES:
+                # One human recording, reused for every language — the
+                # per-language naming convention does not apply to it.
+                continue
+            assert reference.audio == f"{voice_id}.{language_id}.wav"
     assert set(settings.speech.languages) == {"de", "en", "fr", "it"}
-    assert len(settings.speech.voices) == 5
+    assert len(settings.speech.voices) == 6
+
+
+def test_thorsten_reuses_one_german_recording_for_every_language() -> None:
+    """Documents the transitional state, so replacing it is a deliberate act.
+
+    The five designed voices carry a separate rendering per language. Thorsten
+    is a real CC0 recording that exists in German only, so en/fr/it point at the
+    same file and inherit a German accent. Swapping in per-language recordings
+    later means changing this test on purpose rather than by accident.
+    """
+
+    voice = SpeechSettings().voices["thorsten"]
+    assert set(voice.refs) == {"de", "en", "fr", "it"}
+    assert {reference.audio for reference in voice.refs.values()} == {"thorsten.de.wav"}
+    assert len({reference.text for reference in voice.refs.values()}) == 1
 
 
 def test_fixed_silence_defaults_remain_conservative() -> None:
@@ -273,9 +293,12 @@ def test_yaml_root_must_be_a_mapping(tmp_path: Path) -> None:
 
 
 def test_voice_clone_requires_a_reference_per_language() -> None:
+    # default_voice is named explicitly: overriding `voices` drops the shipped
+    # default, and its own validator would fire first and mask this one.
     with pytest.raises(ValidationError, match="lacks a voice_clone reference"):
         SpeechSettings(
             tts_mode="voice_clone",
+            default_voice="warm_female",
             voices={"warm_female": VoiceSettings(instructions="A {language} voice.")},
         )
 
@@ -283,6 +306,7 @@ def test_voice_clone_requires_a_reference_per_language() -> None:
 def test_voice_design_mode_does_not_require_references() -> None:
     speech = SpeechSettings(
         tts_mode="voice_design",
+        default_voice="warm_female",
         voices={"warm_female": VoiceSettings(instructions="A {language} voice.")},
     )
     assert speech.tts_mode == "voice_design"

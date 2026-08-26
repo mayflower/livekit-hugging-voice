@@ -58,7 +58,7 @@ the web page's own origin and `/rtc` is proxied to LiveKit. This lets one truste
 HTTPS reverse proxy cover both the page and signaling.
 
 Empty language/voice environment values inherit the service defaults (shipped as
-`de` and `warm_female`). Explicit IDs must exist in the GPU service's
+`de` and `thorsten`). Explicit IDs must exist in the GPU service's
 `speech.languages` and `speech.voices` maps. Server VAD and built-in Parakeet transcription flow through
 the realtime model, so no additional LiveKit VAD/STT/TTS configuration belongs in
 this example.
