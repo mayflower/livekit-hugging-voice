@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest
 
+from .config import ServiceSettings
+from .version import __version__
+
 
 class ServiceTelemetry:
     def __init__(self) -> None:
@@ -350,7 +353,48 @@ class ServiceTelemetry:
             "Observed GPU memory use when NVML data is available",
             registry=self.registry,
         )
+        # Latency depends as much on how the process was configured as on what
+        # it does. Without this, a dashboard cannot tell which llama.cpp cache
+        # settings produced a run, and comparing two deployments means reading
+        # values.yaml from memory. Set once by the lifecycle, after the
+        # settings are validated.
+        self.build_info = Gauge(
+            "hugging_voice_build_info",
+            "Static identity of this process: version and latency-relevant model settings",
+            (
+                "version",
+                "llm_profile",
+                "tts_profile",
+                "swa_full",
+                "context_size",
+                "parallel_slots",
+                "cache_type_k",
+                "cache_type_v",
+                "cache_reuse",
+                "flash_attention",
+                "partial_stt",
+            ),
+            registry=self.registry,
+        )
         self.ready.set(0)
+
+    def describe_build(self, settings: ServiceSettings) -> None:
+        """Publish the process identity as a single always-1 sample."""
+
+        models = settings.models
+        self.build_info.labels(
+            version=__version__,
+            llm_profile=models.llm_profile,
+            tts_profile=settings.tts.profile,
+            swa_full=str(models.llama_swa_full).lower(),
+            context_size=str(models.llama_context_size),
+            parallel_slots=str(models.llama_parallel_slots),
+            cache_type_k=models.llama_cache_type_k,
+            cache_type_v=models.llama_cache_type_v,
+            cache_reuse=str(models.llama_cache_reuse),
+            flash_attention=models.llama_flash_attention,
+            partial_stt=str(settings.transcription.partial_enabled).lower(),
+        ).set(1)
 
     def render(self) -> bytes:
         return generate_latest(self.registry)

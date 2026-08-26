@@ -8,6 +8,9 @@
   German only; `en`, `fr`, and `it` reuse it and inherit a German accent.
   `benchmarks/generate_voice_refs.py` now refuses to regenerate externally
   sourced recordings.
+- Expose `hugging_voice_build_info` with the version and the llama.cpp cache
+  settings that decide whether a prompt prefix survives between turns, so two
+  deployments are distinguishable in a metrics scrape.
 - Generalize the measured soak driver to 1–16 isolated sessions with barrier,
   staggered, normal, tool, and mixed workloads plus p50/p95/p99 and fairness.
 - Add bounded VAD/STT/segmentation/prefix-prefill controls and raw llama.cpp

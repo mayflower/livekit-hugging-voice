@@ -270,6 +270,7 @@ class ServiceLifecycle:
     ) -> None:
         self.settings = settings
         self.telemetry = telemetry or ServiceTelemetry()
+        self.telemetry.describe_build(settings)
         self._cuda_probe = cuda_probe
         self._llama_factory = llama_factory
         self._parakeet_factory = parakeet_factory
