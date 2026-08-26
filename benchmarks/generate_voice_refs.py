@@ -23,7 +23,7 @@ from typing import Any
 import numpy as np
 import torch
 from faster_qwen3_tts import GGMLQwen3TTS
-from hugging_voice_service.config import load_settings
+from hugging_voice_service.config import EXTERNALLY_SOURCED_VOICES, load_settings
 from hugging_voice_service.model_manifest import LockedModel, load_lock, verify_lock
 
 MIN_DURATION_SECONDS = 4.0
@@ -132,6 +132,25 @@ def write_wav(path: Path, audio: np.ndarray, sample_rate: int) -> None:
         destination.writeframes(pcm)
 
 
+def _preserved_artifacts(output_dir: Path) -> list[dict[str, Any]]:
+    """Existing entries for externally sourced voices, so a rerun keeps them.
+
+    ``main`` rewrites metadata.json from scratch. Without this, a rerun would
+    delete the licence and dataset revision of every recording this script did
+    not produce.
+    """
+
+    existing = output_dir / "metadata.json"
+    if not existing.is_file():
+        return []
+    previous = json.loads(existing.read_text(encoding="utf-8"))
+    return [
+        artifact
+        for artifact in previous.get("artifacts", [])
+        if artifact.get("voice") in EXTERNALLY_SOURCED_VOICES
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-root", type=Path, default=Path(".models"))
@@ -172,6 +191,9 @@ def main() -> int:
     unresolved: list[str] = []
     for voice_id, voice in settings.speech.voices.items():
         if args.only_voice and voice_id != args.only_voice:
+            continue
+        if voice_id in EXTERNALLY_SOURCED_VOICES:
+            print(f"skipping {voice_id}: externally sourced recording, not rendered")
             continue
         for language_id, language in settings.speech.languages.items():
             if args.only_language and language_id != args.only_language:
@@ -232,6 +254,7 @@ def main() -> int:
                     "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
                 }
             )
+    artifacts.extend(_preserved_artifacts(args.output_dir))
     metadata = {
         "schema_version": 1,
         "created_at": datetime.now(UTC).isoformat(),

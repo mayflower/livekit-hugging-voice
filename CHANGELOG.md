@@ -2,6 +2,12 @@
 
 ## 0.3.0 - unreleased
 
+- Add `thorsten`, the first voice cloned from a real human recording instead of
+  from a rendering of its own description, and make it the default. The excerpt
+  comes from the CC0-1.0 `Thorsten-Voice/TV-44kHz-Full` dataset and exists in
+  German only; `en`, `fr`, and `it` reuse it and inherit a German accent.
+  `benchmarks/generate_voice_refs.py` now refuses to regenerate externally
+  sourced recordings.
 - Generalize the measured soak driver to 1–16 isolated sessions with barrier,
   staggered, normal, tool, and mixed workloads plus p50/p95/p99 and fairness.
 - Add bounded VAD/STT/segmentation/prefix-prefill controls and raw llama.cpp

@@ -27,6 +27,7 @@ not present in Git or the service image.
 | nano-parakeet | 0.2.1 | Parakeet inference; MIT | optional GPU dependency |
 | faster-qwen3-tts | 0.3.2 | Qwen streaming runtime; MIT | optional GPU dependency |
 | PyTorch / Torchaudio | 2.10.0 | CUDA tensor/audio runtime; BSD-style | optional GPU dependencies |
+| Thorsten-Voice TV-44kHz-Full (excerpt) | dataset revision `2b61b98fa8f99abd1ce1587b4bf413d6ebc217d5`, config `TV-2022.10-Neutral` | `voice_clone` reference recording for the `thorsten` voice; CC0-1.0 | **vendored** as package data (`voice_refs/thorsten.de.wav`) |
 | NVIDIA CUDA/CuDNN image | 12.8.1 / Ubuntu 24.04 | GPU runtime; NVIDIA terms | container base |
 | Python image | 3.11.13 slim Bookworm | language runtime; PSF and bundled terms | container base |
 | LiveKit Server | 1.13.4 | optional local development server; Apache-2.0 | separate container |

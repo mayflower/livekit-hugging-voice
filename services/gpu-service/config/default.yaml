@@ -81,7 +81,7 @@ tts:
 
 speech:
   default_language: de
-  default_voice: warm_female
+  default_voice: thorsten
   # voice_clone drives the base talker with one frozen reference recording per
   # voice and language (stable speaker identity across segments and sessions).
   # voice_design rebuilds each voice from its description on every segment.
@@ -187,3 +187,22 @@ speech:
         en: {audio: friendly_neutral.en.wav, text: *ref_text_en}
         fr: {audio: friendly_neutral.fr.wav, text: *ref_text_fr}
         it: {audio: friendly_neutral.it.wav, text: *ref_text_it}
+    thorsten:
+      # The only voice cloned from a real human recording instead of a rendering
+      # of its own instructions. The recording is German; every other language
+      # reuses it, so the speaker identity carries over and an audible German
+      # accent outside German is accepted. Provenance and licence are recorded in
+      # voice_refs/metadata.json and THIRD_PARTY.md.
+      instructions: >-
+        A calm, natural adult male native {language} speaker with a measured reading
+        pace, neutral warmth, clear articulation, and no foreign accent.
+      refs:
+        de:
+          audio: thorsten.de.wav
+          text: &ref_text_thorsten_de >-
+            Die Leopoldina gilt als älteste naturwissenschaftlich-medizinische
+            Gelehrtengesellschaft in Deutschland. Die derzeitigen Geschehnisse im
+            Mittelmeer finden Wissenschaftler ungewöhnlich und besorgniserregend.
+        en: {audio: thorsten.de.wav, text: *ref_text_thorsten_de}
+        fr: {audio: thorsten.de.wav, text: *ref_text_thorsten_de}
+        it: {audio: thorsten.de.wav, text: *ref_text_thorsten_de}

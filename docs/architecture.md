@@ -70,7 +70,7 @@ slot to `idle`.
 - A session selects a configured language and voice and may append a bounded style
   instruction (honored in `voice_design` mode). The mandatory native-language
   profile and all reference recordings remain operator-controlled.
-- The shipped defaults are `de` and `warm_female`; four languages and five profiles
+- The shipped defaults are `de` and `thorsten`; four languages and six profiles
   are allowlisted.
 
 ## Configurable capacity

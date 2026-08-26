@@ -80,7 +80,7 @@ room-scoped LiveKit credential and an explicit `hugging-voice` agent dispatch. I
 then publishes microphone audio and attaches the agent's remote audio track.
 
 The demo worker reads `HUGGING_VOICE_LANGUAGE`, `HUGGING_VOICE_VOICE`, and
-`HUGGING_VOICE_VOICE_INSTRUCTIONS`; they default to `de`, `warm_female`, and
+`HUGGING_VOICE_VOICE_INSTRUCTIONS`; they default to `de`, `thorsten`, and
 the service-configured voice style. The service's allowed language/voice maps live
 under `speech` in `services/gpu-service/config/default.yaml`. Rebuild after editing
 that image default. Scalar service defaults can also be overridden with

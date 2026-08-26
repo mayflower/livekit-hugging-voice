@@ -51,13 +51,17 @@ process startup. There is no hot swap or automatic fallback.
   `Qwen/Qwen3-TTS-12Hz-0.6B-Base`. A candidate may become a production default
   only with exact artifact pins, the real readiness tool probe, multilingual
   voice checks, tool-evaluation gates, and real NVIDIA multi-session results.
-- Public languages are `de`, `en`, `fr`, and `it`. Public voices are five fixed,
-  operator-defined profiles: `warm_female`, `clear_female`, `warm_male`,
-  `clear_male`, and `friendly_neutral`. The default `voice_clone` TTS mode speaks
-  every profile through the Qwen3-TTS base talker from one frozen, operator-defined
-  reference recording per voice and language, so the perceived speaker stays
-  identical across segments and sessions; the recordings were rendered once from
-  the VoiceDesign descriptions and are packaged with the service. The `voice_design`
+- Public languages are `de`, `en`, `fr`, and `it`. Public voices are six fixed,
+  operator-defined profiles: `thorsten` (the default), `warm_female`,
+  `clear_female`, `warm_male`, `clear_male`, and `friendly_neutral`. The default
+  `voice_clone` TTS mode speaks every profile through the Qwen3-TTS base talker
+  from one frozen, operator-defined reference recording per voice and language,
+  so the perceived speaker stays identical across segments and sessions. Five of
+  the six were rendered once from their VoiceDesign descriptions; `thorsten` is a
+  real CC0 human recording (German only, reused for the other three languages),
+  which is why it is exempt from the `{voice_id}.{language}.wav` naming
+  convention and from regeneration — see `EXTERNALLY_SOURCED_VOICES`. All
+  recordings are packaged with the service. The `voice_design`
   mode rebuilds each voice from its description on every segment. Clients may add
   bounded style instructions (honored only in `voice_design` mode) but cannot
   submit model names, paths, reference audio, or arbitrary base voice designs.

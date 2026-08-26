@@ -400,6 +400,7 @@ def test_session_speech_configuration_reaches_llm_and_tts(tmp_path: Path) -> Non
                 "clear_female",
                 "clear_male",
                 "friendly_neutral",
+                "thorsten",
                 "warm_female",
                 "warm_male",
             ]

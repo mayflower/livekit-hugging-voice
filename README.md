@@ -34,8 +34,8 @@ Session capacity is
 operator-configurable; the default is two for compatibility. This default is not
 a performance guarantee.
 
-The shipped catalog provides German, English, French, and Italian plus five fixed
-voice profiles. `de` and `warm_female` are the defaults. The default
+The shipped catalog provides German, English, French, and Italian plus six fixed
+voice profiles. `de` and `thorsten` are the defaults. The default
 `voice_clone` mode uses frozen operator-provided reference recordings;
 `voice_design` creates the voice from its configured description.
 
