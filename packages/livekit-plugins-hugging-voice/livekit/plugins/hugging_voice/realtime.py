@@ -125,23 +125,53 @@ def _id(prefix: str) -> str:
 # write to independently — the framework marks a tool call non-blocking there,
 # this plugin stores the turn ids it needs when building the wire item — so it
 # describes bookkeeping, not conversation content.
+#
+# ``interrupted`` is in the set because this plugin cannot know it: it records a
+# finished response with a constant ``interrupted=False`` (it has no view of what
+# the caller heard), while the framework fills in what actually happened. Demanding
+# agreement on a field only one side can determine would reject appends forever.
 _VOLATILE_ITEM_FIELDS = frozenset(
-    {"created_at", "metrics", "transcript_confidence", "hash", "extra"}
+    {"created_at", "metrics", "transcript_confidence", "hash", "extra", "interrupted"}
 )
 
 
-def _context_prefix(items: Sequence[object], length: int) -> list[object]:
-    """The first ``length`` items reduced to what the service has to agree on.
+def _comparable_item(item: object) -> object:
+    """An item reduced to what the service has to agree on.
 
     Content still counts: mutating an item the service already holds is not an
     append, and it cannot be applied to an atomic model context, so it has to be
     refused rather than silently dropped.
     """
-    prefix: list[object] = []
-    for item in items[:length]:
-        dump = getattr(item, "model_dump", None)
-        prefix.append(dump(exclude=set(_VOLATILE_ITEM_FIELDS)) if dump else item)
-    return prefix
+    dump = getattr(item, "model_dump", None)
+    return dump(exclude=set(_VOLATILE_ITEM_FIELDS)) if dump else item
+
+
+def _prefix_mismatch(current: Sequence[object], replacement: Sequence[object]) -> str | None:
+    """Say where an incoming context stops matching the one already sent.
+
+    The bare "not append-only" rejection cost three debugging rounds on the
+    voicebot: the same message says a rewritten item, a reordered history, a lost
+    one, or a field one side fills in and the other does not. Naming the item and
+    the fields turns the next occurrence into one log line.
+    """
+    if len(replacement) < len(current):
+        return f"the context lost {len(current) - len(replacement)} of {len(current)} items"
+
+    for index, (mine, theirs) in enumerate(zip(current, replacement[: len(current)], strict=True)):
+        mine_dump, theirs_dump = _comparable_item(mine), _comparable_item(theirs)
+        if mine_dump == theirs_dump:
+            continue
+        item_id = getattr(mine, "id", "?")
+        if isinstance(mine_dump, dict) and isinstance(theirs_dump, dict):
+            fields = sorted(
+                key
+                for key in set(mine_dump) | set(theirs_dump)
+                if mine_dump.get(key) != theirs_dump.get(key)
+            )
+            return f"item {index} ({item_id}) differs in {', '.join(fields)}"
+        return f"item {index} ({item_id}) differs"
+
+    return None
 
 
 def _rejected_generation(message: str) -> asyncio.Future[GenerationCreatedEvent]:
@@ -462,8 +492,10 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         replacement = list(chat_ctx.items)
         if len(replacement) > 30:
             raise RealtimeError("Hugging Voice chat context is limited to 30 items")
-        if _context_prefix(replacement, len(current)) != _context_prefix(current, len(current)):
-            raise RealtimeError("Hugging Voice supports only append-only chat context updates")
+        if (mismatch := _prefix_mismatch(current, replacement)) is not None:
+            raise RealtimeError(
+                f"Hugging Voice supports only append-only chat context updates — {mismatch}"
+            )
         additions = replacement[len(current) :]
         commands = [(item, self._conversation_command(item)) for item in additions]
         if not self._connected.is_set():

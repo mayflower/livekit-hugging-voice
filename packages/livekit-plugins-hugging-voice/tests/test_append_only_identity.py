@@ -188,3 +188,73 @@ async def test_changed_content_is_still_refused() -> None:
             await session.update_chat_ctx(rewritten)
     finally:
         await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_the_rejection_says_which_item_and_field_diverged() -> None:
+    """A bare "not append-only" is the same sentence for four different causes.
+
+    Naming the item and the differing fields is what turns the next occurrence
+    into one log line instead of a debugging round.
+    """
+    model, session = _unconnected_session()
+    try:
+        session._chat_ctx = _assistant("Ich schaue gerade nach.", "item_filler")
+        rewritten = _assistant("Etwas anderes.", "item_filler")
+
+        with pytest.raises(RealtimeError) as excinfo:
+            await session.update_chat_ctx(rewritten)
+
+        message = str(excinfo.value)
+        assert "item 0 (item_filler)" in message
+        assert "content" in message
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_the_rejection_says_when_history_was_lost() -> None:
+    model, session = _unconnected_session()
+    try:
+        first = ChatContext.empty()
+        first.add_message(id="item_a", role="assistant", content="eins")
+        first.add_message(id="item_b", role="user", content="zwei")
+        session._chat_ctx = first
+
+        with pytest.raises(RealtimeError, match="lost 1 of 2 items"):
+            await session.update_chat_ctx(_assistant("eins", "item_a"))
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_interruption_the_plugin_cannot_see_does_not_break_the_append() -> None:
+    """``interrupted`` is the framework's to know, not this plugin's.
+
+    ``_finish_response`` records every finished response with a constant
+    ``interrupted=False`` — it has no view of what the caller actually heard —
+    while the framework fills in the real value from the speech handle. Demanding
+    agreement there would refuse every later append.
+    """
+    model, session = _unconnected_session()
+    try:
+        session._chat_ctx = _assistant("Ich schaue gerade nach.", "item_filler")
+
+        interrupted = ChatContext.empty()
+        interrupted.add_message(
+            id="item_filler",
+            role="assistant",
+            content="Ich schaue gerade nach.",
+            interrupted=True,
+        )
+        interrupted.insert(
+            FunctionCallOutput(
+                call_id="call_1", name="web_search", output="Drei Treffer.", is_error=False
+            )
+        )
+
+        await session.update_chat_ctx(interrupted)
+
+        assert len(session.chat_ctx.items) == 2
+    finally:
+        await model.aclose()
