@@ -135,6 +135,36 @@ _VOLATILE_ITEM_FIELDS = frozenset(
 )
 
 
+def _is_conversation(item: object) -> bool:
+    """Whether an item belongs in the model's context at all.
+
+    ``ChatContext`` carries two kinds of item. Conversation — what the caller and
+    the model said, and the tool calls in between — is what the service's atomic
+    context holds. The rest is the framework recording its own state:
+    ``AgentConfigUpdate`` when a session starts (the instructions and the initial
+    tool list), ``AgentHandoff`` when agents change. Neither travels as a
+    conversation item here: instructions and tools reach the service through the
+    session configuration, via ``update_instructions`` and ``update_tools``, and
+    the protocol has no wire item for either record.
+
+    Filtering them is not cosmetic. ``ChatContext.insert`` orders by
+    ``created_at``, so the session-config record is created before the first
+    spoken word and stays at index 0 for the whole call, while this plugin's
+    context starts at the first assistant message it records itself. Left in, the
+    two lists are offset by one and the append-only check below rejects every
+    update from the greeting onwards — which is how a caller stops hearing tool
+    results (2026-08-31, room dev-martin-vds-web-call-1788183135400).
+
+    An allow-list, not a deny-list: the framework's own ``ChatContext.copy`` can
+    already drop both records (``exclude_config_update``, ``exclude_handoff``),
+    which is what it thinks of them too, but a deny-list would let the next new
+    item type through and break a call on an unknown ``type``. Bookkeeping until
+    proven otherwise is the safer default for a context this plugin only appends
+    to.
+    """
+    return isinstance(item, ChatMessage | FunctionCall | FunctionCallOutput)
+
+
 def _comparable_item(item: object) -> object:
     """An item reduced to what the service has to agree on.
 
@@ -489,7 +519,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
 
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         current = list(self._chat_ctx.items)
-        replacement = list(chat_ctx.items)
+        replacement = [item for item in chat_ctx.items if _is_conversation(item)]
         if len(replacement) > 30:
             raise RealtimeError("Hugging Voice chat context is limited to 30 items")
         if (mismatch := _prefix_mismatch(current, replacement)) is not None:
@@ -499,7 +529,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         additions = replacement[len(current) :]
         commands = [(item, self._conversation_command(item)) for item in additions]
         if not self._connected.is_set():
-            self._chat_ctx = chat_ctx.copy()
+            self._chat_ctx = ChatContext(replacement)
             return
         for _, command in commands:
             self._command_event(command)

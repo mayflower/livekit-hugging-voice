@@ -258,3 +258,104 @@ async def test_an_interruption_the_plugin_cannot_see_does_not_break_the_append()
         assert len(session.chat_ctx.items) == 2
     finally:
         await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_the_frameworks_session_config_record_does_not_break_the_append() -> None:
+    """The failure that survived three fixes: a versat, not a diverging field.
+
+    ``AgentConfigUpdate`` is a ChatContext item the framework writes when a
+    session starts, recording the instructions and the initial tool list
+    (``AgentActivity`` inserts it into both the agent's and the session's
+    context). ``ChatContext.insert`` orders by ``created_at``, so it is created
+    before the first spoken word and stays at index 0 for the whole call.
+
+    This plugin never holds it: instructions and tools travel over the session
+    configuration, not as conversation items, and it records its own responses in
+    ``_finish_response``, which starts the context at the first assistant
+    message. So the two lists are offset by one from the greeting onwards, and
+    comparing index against index rejects every append — including every finished
+    async-tool result.
+
+    Observed in room ``dev-martin-vds-web-call-1788183135400`` (2026-08-31):
+    "item 0 (item_4e0aaef8...) differs in content, id, instructions, role,
+    tools_added, type". ``id`` and ``type`` in that list are the tell: those are
+    not two versions of one item, they are two different kinds of item.
+    """
+    from livekit.agents.llm import AgentConfigUpdate
+
+    model, session = _unconnected_session()
+    try:
+        # what the plugin holds: its own record of the greeting it just spoke
+        session._chat_ctx = _assistant("Hallo! Hier ist die Telefonassistenz.", "item_greeting")
+
+        # what the framework sends: its session-config record first, then the
+        # same greeting, then the finished tool call
+        incoming = ChatContext.empty()
+        incoming.insert(
+            AgentConfigUpdate(
+                instructions="Du bist die Telefonassistenz.",
+                tools_added=["web_search", "knowledge_base_search"],
+            )
+        )
+        incoming.add_message(
+            id="item_greeting",
+            role="assistant",
+            content="Hallo! Hier ist die Telefonassistenz.",
+            interrupted=False,
+        )
+        incoming.insert(
+            [
+                FunctionCall(call_id="call_1", name="web_search", arguments="{}"),
+                FunctionCallOutput(
+                    call_id="call_1",
+                    name="web_search",
+                    output="Drei Veranstaltungen heute Abend.",
+                    is_error=False,
+                ),
+            ]
+        )
+
+        assert incoming.items[0].type == "agent_config_update", (
+            "premise: the config record sorts to index 0"
+        )
+
+        await session.update_chat_ctx(incoming)
+
+        # the config record is not conversation and must not enter the context
+        assert [item.id for item in session.chat_ctx.items] == [
+            "item_greeting",
+            incoming.items[2].id,
+            incoming.items[3].id,
+        ]
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_agent_handoff_record_is_ignored_too() -> None:
+    """Same category: a framework record the service has no representation for.
+
+    Which agent is active is bookkeeping; what the caller and the model said is
+    conversation. Ignoring the record is safe because the parts that do affect
+    the model — instructions and tools — arrive through ``update_instructions``
+    and ``update_tools``.
+    """
+    from livekit.agents.llm import AgentHandoff
+
+    model, session = _unconnected_session()
+    try:
+        session._chat_ctx = _assistant("Ich verbinde Sie weiter.", "item_a")
+
+        incoming = ChatContext.empty()
+        incoming.add_message(
+            id="item_a", role="assistant", content="Ich verbinde Sie weiter.", interrupted=False
+        )
+        incoming.insert(AgentHandoff(new_agent_id="agent_2"))
+        incoming.add_message(id="item_b", role="user", content="Danke.")
+
+        await session.update_chat_ctx(incoming)
+
+        assert [item.id for item in session.chat_ctx.items] == ["item_a", "item_b"]
+    finally:
+        await model.aclose()
