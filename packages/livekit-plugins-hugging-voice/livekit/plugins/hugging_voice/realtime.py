@@ -113,6 +113,28 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
+def _rejected_generation(message: str) -> asyncio.Future[GenerationCreatedEvent]:
+    """Report a rejected generation request through the future, not by raising.
+
+    ``generate_reply`` is called from two places in the framework, and only one of
+    them survives a raise. ``AgentActivity._realtime_reply_task`` wraps the
+    ``await`` on this future in ``except llm.RealtimeError`` but makes the call
+    itself outside that block, and ``_ToolExecutor._deliver_reply`` — the path
+    every deferred async-tool result takes — has no ``try`` at all. A raise there
+    ends the delivery task as ``Task exception was never retrieved``: the caller
+    loses the finished tool result and nothing is logged.
+
+    Reporting through the future is what the framework expects and what the
+    plugins shipped with it do: they send their create-response event
+    unconditionally and put any failure into the future they hand back. Note the
+    asymmetry with ``say``, which keeps raising on purpose — the framework calls
+    that one *inside* its ``try``.
+    """
+    future: asyncio.Future[GenerationCreatedEvent] = asyncio.get_running_loop().create_future()
+    future.set_exception(RealtimeError(message))
+    return future
+
+
 def _ack_timeout_error(command_kind: str) -> RealtimeError:
     code = (
         ErrorCode.SESSION_UPDATE_ACK_TIMEOUT
@@ -472,13 +494,16 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         tool_choice: NotGivenOr[ToolChoice] = NOT_GIVEN,
         tools: NotGivenOr[list[Tool]] = NOT_GIVEN,
     ) -> asyncio.Future[GenerationCreatedEvent]:
+        # Every precondition below travels in the future — see _rejected_generation.
+        # The queue failure further down keeps raising: it also schedules a fatal
+        # error, so the session ends visibly instead of losing a reply in silence.
         if self._pending_generation is not None or self._response is not None:
-            raise RealtimeError("a response is already pending or active")
+            return _rejected_generation("a response is already pending or active")
         if self._ever_connected and not self._connected.is_set():
-            raise RealtimeError("cannot generate a response while disconnected")
+            return _rejected_generation("cannot generate a response while disconnected")
         response_instructions = instructions if utils.is_given(instructions) else None
         if response_instructions is not None and len(response_instructions) > 8_000:
-            raise RealtimeError("response instructions exceed the protocol limit")
+            return _rejected_generation("response instructions exceed the protocol limit")
         event_id = _id("evt")
         response_tools = self._tools if not utils.is_given(tools) else ToolContext(tools)
         response_choice = (
