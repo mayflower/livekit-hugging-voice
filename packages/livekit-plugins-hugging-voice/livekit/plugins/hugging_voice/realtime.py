@@ -113,6 +113,37 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
+# Fields on a context item that say when it was recorded rather than what it
+# says. Both sides build their own instance of the same item — the plugin records
+# a filler's assistant message itself in _finish_response, the framework builds
+# its own from the same generation under the same id — so these never match, and
+# comparing whole models rejected every append from the first assistant turn
+# onwards. Conversation metadata belongs to the framework; the service only needs
+# the history it already has, in the same order, with the new items on the end.
+#
+# ``extra`` is in the set for the same reason: it is a free-form bag both sides
+# write to independently — the framework marks a tool call non-blocking there,
+# this plugin stores the turn ids it needs when building the wire item — so it
+# describes bookkeeping, not conversation content.
+_VOLATILE_ITEM_FIELDS = frozenset(
+    {"created_at", "metrics", "transcript_confidence", "hash", "extra"}
+)
+
+
+def _context_prefix(items: Sequence[object], length: int) -> list[object]:
+    """The first ``length`` items reduced to what the service has to agree on.
+
+    Content still counts: mutating an item the service already holds is not an
+    append, and it cannot be applied to an atomic model context, so it has to be
+    refused rather than silently dropped.
+    """
+    prefix: list[object] = []
+    for item in items[:length]:
+        dump = getattr(item, "model_dump", None)
+        prefix.append(dump(exclude=set(_VOLATILE_ITEM_FIELDS)) if dump else item)
+    return prefix
+
+
 def _rejected_generation(message: str) -> asyncio.Future[GenerationCreatedEvent]:
     """Report a rejected generation request through the future, not by raising.
 
@@ -431,7 +462,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         replacement = list(chat_ctx.items)
         if len(replacement) > 30:
             raise RealtimeError("Hugging Voice chat context is limited to 30 items")
-        if replacement[: len(current)] != current:
+        if _context_prefix(replacement, len(current)) != _context_prefix(current, len(current)):
             raise RealtimeError("Hugging Voice supports only append-only chat context updates")
         additions = replacement[len(current) :]
         commands = [(item, self._conversation_command(item)) for item in additions]
