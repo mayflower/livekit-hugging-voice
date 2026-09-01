@@ -32,7 +32,13 @@ import asyncio
 
 import pytest
 from livekit.agents import APIConnectOptions
-from livekit.agents.llm import ChatContext, FunctionCall, FunctionCallOutput, RealtimeError
+from livekit.agents.llm import (
+    ChatContext,
+    ChatMessage,
+    FunctionCall,
+    FunctionCallOutput,
+    RealtimeError,
+)
 from livekit.plugins.hugging_voice.realtime import RealtimeModel, RealtimeSession
 
 
@@ -95,8 +101,15 @@ async def test_the_same_message_built_twice_is_still_append_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_reordered_history_is_still_refused() -> None:
-    """The guard must keep catching what it was written for."""
+async def test_a_reordered_history_is_tolerated() -> None:
+    """Unrepresentable, but harmless — and refusing costs the delivery in flight.
+
+    The service holds one atomic context, so items already in it cannot be moved
+    no matter what this plugin does. A reordering that leaves every item's content
+    intact therefore asks for nothing that could be acted on, while a rejection
+    would drop whatever async-tool result travelled in the same update. Content is
+    what still counts; the test below pins that half.
+    """
     model, session = _unconnected_session()
     try:
         first = ChatContext.empty()
@@ -108,27 +121,9 @@ async def test_a_reordered_history_is_still_refused() -> None:
         swapped.add_message(id="item_b", role="user", content="zwei")
         swapped.add_message(id="item_a", role="assistant", content="eins")
 
-        with pytest.raises(RealtimeError, match="append-only"):
-            await session.update_chat_ctx(swapped)
-    finally:
-        await model.aclose()
+        await session.update_chat_ctx(swapped)
 
-
-@pytest.mark.asyncio
-async def test_a_dropped_item_is_still_refused() -> None:
-    """Removing history is not an append either — the service cannot forget."""
-    model, session = _unconnected_session()
-    try:
-        first = ChatContext.empty()
-        first.add_message(id="item_a", role="assistant", content="eins")
-        first.add_message(id="item_b", role="user", content="zwei")
-        session._chat_ctx = first
-
-        without_first = ChatContext.empty()
-        without_first.add_message(id="item_b", role="user", content="zwei")
-
-        with pytest.raises(RealtimeError, match="append-only"):
-            await session.update_chat_ctx(without_first)
+        assert {item.id for item in session.chat_ctx.items} == {"item_a", "item_b"}
     finally:
         await model.aclose()
 
@@ -206,23 +201,8 @@ async def test_the_rejection_says_which_item_and_field_diverged() -> None:
             await session.update_chat_ctx(rewritten)
 
         message = str(excinfo.value)
-        assert "item 0 (item_filler)" in message
+        assert "item_filler came back modified" in message
         assert "content" in message
-    finally:
-        await model.aclose()
-
-
-@pytest.mark.asyncio
-async def test_the_rejection_says_when_history_was_lost() -> None:
-    model, session = _unconnected_session()
-    try:
-        first = ChatContext.empty()
-        first.add_message(id="item_a", role="assistant", content="eins")
-        first.add_message(id="item_b", role="user", content="zwei")
-        session._chat_ctx = first
-
-        with pytest.raises(RealtimeError, match="lost 1 of 2 items"):
-            await session.update_chat_ctx(_assistant("eins", "item_a"))
     finally:
         await model.aclose()
 
@@ -355,6 +335,92 @@ async def test_an_agent_handoff_record_is_ignored_too() -> None:
         incoming.add_message(id="item_b", role="user", content="Danke.")
 
         await session.update_chat_ctx(incoming)
+
+        assert [item.id for item in session.chat_ctx.items] == ["item_a", "item_b"]
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_result_arriving_while_the_announcement_still_plays_is_accepted() -> None:
+    """The failure that survived four fixes: a race, not a diverging field.
+
+    The two sides record the same assistant message at different moments. This
+    plugin adds it in ``_finish_response``, when the *generation* is done; the
+    framework adds it when the *playback* is done — the ``conversation_item_added``
+    event fires seconds later, for as long as the sentence takes to speak.
+
+    A deferred async-tool result lands right inside that window, and it does not
+    land quietly: ``_ToolExecutor._enqueue_reply`` synthesizes a fresh
+    ``FunctionCall``/``FunctionCallOutput`` pair (``_make_update_pair``, call_id
+    suffixed ``_final``) and inserts it. So the incoming context is missing an item
+    this plugin already holds *and* carries two it does not — every index past the
+    announcement is off by one, and comparing index against index refuses the
+    result. The caller hears the announcement, then nothing.
+
+    Observed in room ``dev-martin-vds-web-call-1788237086423`` (2026-09-01): three
+    tool calls, three times "item 4 (item_bab80580...) differs in arguments,
+    call_id, content, id, name, role, type". The mixed field list is the tell —
+    ``content``/``role`` belong to a message, ``arguments``/``call_id``/``name`` to
+    a call. Those are not two versions of one item.
+
+    Position cannot decide this. Identity can: an item the service already holds
+    must not come back changed, and anything genuinely new gets appended.
+    """
+    model, session = _unconnected_session()
+    try:
+        greeting = ChatMessage(id="item_greeting", role="assistant", content=["Hallo!"])
+        question = ChatMessage(id="item_user", role="user", content=["Was läuft heute Abend?"])
+        call = FunctionCall(call_id="call_1", name="web_search", arguments='{"query": "heute"}')
+        ack = FunctionCallOutput(
+            call_id="call_1", name="web_search", output="Läuft gerade.", is_error=False
+        )
+        announcement = ChatMessage(
+            id="item_announcement", role="assistant", content=["Ich schaue gerade nach."]
+        )
+
+        # the plugin is one message ahead: the announcement finished generating
+        session._chat_ctx = ChatContext([greeting, question, call, ack, announcement])
+
+        # the framework is still speaking it, so its context has no announcement —
+        # but it has the synthetic pair carrying the finished result
+        final_call = FunctionCall(
+            call_id="call_1_final", name="web_search", arguments='{"query": "heute"}'
+        )
+        final_output = FunctionCallOutput(
+            call_id="call_1_final",
+            name="web_search",
+            output="Drei Veranstaltungen heute Abend.",
+            is_error=False,
+        )
+        incoming = ChatContext([greeting, question, call, ack, final_call, final_output])
+
+        await session.update_chat_ctx(incoming)
+
+        ids = [item.id for item in session.chat_ctx.items]
+        assert final_output.id in ids, "the finished result must reach the model"
+        assert announcement.id in ids, "the plugin must not forget what the service holds"
+    finally:
+        await model.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_message_the_framework_has_not_committed_yet_is_not_a_loss() -> None:
+    """Absence is the framework lagging, not history being thrown away.
+
+    Since the plugin records an assistant turn seconds before the framework does,
+    "the incoming context is shorter" is an ordinary state, not a fault. Refusing
+    it only kills the delivery that was in flight; the service keeps its own record
+    either way, because nothing here can un-send an item.
+    """
+    model, session = _unconnected_session()
+    try:
+        first = ChatContext.empty()
+        first.add_message(id="item_a", role="assistant", content="eins")
+        first.add_message(id="item_b", role="user", content="zwei")
+        session._chat_ctx = first
+
+        await session.update_chat_ctx(_assistant("eins", "item_a"))
 
         assert [item.id for item in session.chat_ctx.items] == ["item_a", "item_b"]
     finally:

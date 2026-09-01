@@ -176,18 +176,50 @@ def _comparable_item(item: object) -> object:
     return dump(exclude=set(_VOLATILE_ITEM_FIELDS)) if dump else item
 
 
-def _prefix_mismatch(current: Sequence[object], replacement: Sequence[object]) -> str | None:
-    """Say where an incoming context stops matching the one already sent.
+def _rewritten_item(current: Sequence[object], replacement: Sequence[object]) -> str | None:
+    """Say whether an incoming context rewrites something the service already holds.
 
-    The bare "not append-only" rejection cost three debugging rounds on the
-    voicebot: the same message says a rewritten item, a reordered history, a lost
-    one, or a field one side fills in and the other does not. Naming the item and
-    the fields turns the next occurrence into one log line.
+    Match by item id, not by position. Position looks like the natural check for
+    an append-only context and is the wrong instrument here, because the two
+    lists are not maintained in step. This plugin records an assistant turn in
+    ``_finish_response``, when the *generation* finishes; the framework records
+    it when the *playback* finishes, which is one spoken sentence later. For the
+    length of that sentence the plugin is one item ahead — and a deferred
+    async-tool result is delivered precisely inside that window, carrying a
+    freshly synthesized ``FunctionCall``/``FunctionCallOutput`` pair
+    (``_ToolExecutor._enqueue_reply`` via ``RunContext._make_update_pair``). So
+    the incoming context lacks an item this plugin holds *and* brings two it does
+    not, and every index past the announcement is off by one.
+
+    Four fixes tried to keep the positional comparison working — excluding
+    volatile fields, then naming the diverging fields, then filtering the
+    framework's own bookkeeping records. Each was right on its own terms and none
+    could hold, because no amount of field tolerance repairs a comparison whose
+    premise is that both lists grow at the same moment.
+
+    What is left to enforce is the one thing an atomic model context genuinely
+    cannot survive: an item it already holds coming back with different content.
+    Two things are deliberately no longer errors.
+
+    *Absence.* An item missing from the incoming context is the framework
+    lagging, as above — not history being discarded. Nothing here can un-send an
+    item anyway, so refusing would only kill the delivery in flight.
+
+    *Order.* Items the service already holds cannot be reordered in it. A
+    reordering that leaves every item's content intact is therefore
+    unrepresentable but harmless, and refusing it costs the same delivery.
+
+    Everything with an unknown id is new and gets appended in the order it
+    arrived, which is the only thing an append-only context can do with it — and
+    for a tool result, the end of the context is exactly where it belongs.
     """
-    if len(replacement) < len(current):
-        return f"the context lost {len(current) - len(replacement)} of {len(current)} items"
-
-    for index, (mine, theirs) in enumerate(zip(current, replacement[: len(current)], strict=True)):
+    incoming = {
+        item_id: item for item in replacement if (item_id := getattr(item, "id", None)) is not None
+    }
+    for mine in current:
+        theirs = incoming.get(getattr(mine, "id", None))
+        if theirs is None:
+            continue
         mine_dump, theirs_dump = _comparable_item(mine), _comparable_item(theirs)
         if mine_dump == theirs_dump:
             continue
@@ -198,8 +230,8 @@ def _prefix_mismatch(current: Sequence[object], replacement: Sequence[object]) -
                 for key in set(mine_dump) | set(theirs_dump)
                 if mine_dump.get(key) != theirs_dump.get(key)
             )
-            return f"item {index} ({item_id}) differs in {', '.join(fields)}"
-        return f"item {index} ({item_id}) differs"
+            return f"{item_id} came back modified: differs in {', '.join(fields)}"
+        return f"{item_id} came back modified"
 
     return None
 
@@ -520,16 +552,22 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
     async def update_chat_ctx(self, chat_ctx: ChatContext) -> None:
         current = list(self._chat_ctx.items)
         replacement = [item for item in chat_ctx.items if _is_conversation(item)]
-        if len(replacement) > 30:
-            raise RealtimeError("Hugging Voice chat context is limited to 30 items")
-        if (mismatch := _prefix_mismatch(current, replacement)) is not None:
+        if (rewrite := _rewritten_item(current, replacement)) is not None:
             raise RealtimeError(
-                f"Hugging Voice supports only append-only chat context updates — {mismatch}"
+                f"Hugging Voice supports only append-only chat context updates — {rewrite}"
             )
-        additions = replacement[len(current) :]
+        known = {item.id for item in current}
+        additions = [item for item in replacement if item.id not in known]
+        if len(current) + len(additions) > 30:
+            raise RealtimeError("Hugging Voice chat context is limited to 30 items")
+        if absent := [item.id for item in current if item.id not in {i.id for i in replacement}]:
+            # Expected while the framework is still speaking a turn this plugin
+            # has already recorded; see _rewritten_item. Worth a line only because
+            # a persistent absence would mean something else.
+            logger.debug("items absent from the incoming context: %s", ", ".join(absent))
         commands = [(item, self._conversation_command(item)) for item in additions]
         if not self._connected.is_set():
-            self._chat_ctx = ChatContext(replacement)
+            self._chat_ctx = ChatContext([*current, *additions])
             return
         for _, command in commands:
             self._command_event(command)
