@@ -148,6 +148,28 @@ def test_environment_overrides_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.tts.chunk_size == 8
 
 
+def test_twice_nested_environment_override_keeps_the_rest_of_the_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """speech.segmentation is reachable from the environment without losing voices.
+
+    The deployment sets speech values through HV_SPEECH__* variables. A twice
+    nested name has to merge into the mapping the YAML already supplied rather
+    than replace it, or the voice and language tables disappear and the service
+    fails its own validator long after the environment was written.
+    """
+
+    monkeypatch.setenv("HV_SPEECH__SEGMENTATION__FIRST_SEGMENT_MAX_CHARACTERS", "40")
+    monkeypatch.setenv("HV_SPEECH__DEFAULT_VOICE", "thorsten")
+    settings = load_settings(DEFAULT_CONFIG)
+    assert settings.speech.segmentation.first_segment_max_characters == 40
+    assert settings.speech.segmentation.next_segment_max_characters == 140
+    assert settings.speech.segmentation.hard_max_characters == 160
+    assert settings.speech.default_voice == "thorsten"
+    assert "thorsten" in settings.speech.voices
+    assert set(settings.speech.languages) == {"de", "en", "fr", "it"}
+
+
 def test_capacity_is_bounded_and_matches_llama_slots() -> None:
     configured = ServiceSettings(
         server={"max_sessions": 20},  # type: ignore[arg-type]

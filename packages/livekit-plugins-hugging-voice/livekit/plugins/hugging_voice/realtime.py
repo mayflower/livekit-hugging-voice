@@ -569,8 +569,21 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         if not self._connected.is_set():
             self._chat_ctx = ChatContext([*current, *additions])
             return
-        for _, command in commands:
-            self._command_event(command)
+        # Build every event before sending any, so a batch that turns out to be
+        # unrepresentable is refused whole instead of half-applied. The dry run has
+        # to mirror what the send loop below will see: it appends each item as its
+        # acknowledgement lands, so by the time an output goes out its call is in
+        # the context. Validating all of them against the context as it stands now
+        # would fail on the first output whose call travels in the same batch —
+        # which is every deferred async-tool result, because _enqueue_reply
+        # synthesizes a FunctionCall/FunctionCallOutput pair under a call_id the
+        # service has never seen (2026-09-01, room
+        # dev-martin-vds-web-call-1788239967658: "function output references an
+        # unknown call", three times).
+        validated: list[object] = []
+        for item, command in commands:
+            self._command_event(command, pending=validated)
+            validated.append(item)
         for item, command in commands:
             await self._queue_with_ack(command)
             self._chat_ctx = ChatContext([*self._chat_ctx.items, item])
@@ -1387,7 +1400,13 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
         except Exception as exc:
             self._schedule_fatal(exc)
 
-    def _command_event(self, command: _Command) -> ClientEvent:
+    def _command_event(self, command: _Command, *, pending: Sequence[object] = ()) -> ClientEvent:
+        """Build the wire event for one queued command.
+
+        ``pending`` names the items of the same batch that were already built, so a
+        function output can resolve against a call arriving beside it rather than
+        only against what the service has confirmed. See ``update_chat_ctx``.
+        """
         session_id = self._session_id
         if session_id is None:
             raise ConnectionError("Hugging Voice session ID is unavailable")
@@ -1435,7 +1454,7 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
                 call = next(
                     (
                         entry
-                        for entry in self._chat_ctx.items
+                        for entry in (*self._chat_ctx.items, *pending)
                         if isinstance(entry, FunctionCall) and entry.call_id == item.call_id
                     ),
                     None,

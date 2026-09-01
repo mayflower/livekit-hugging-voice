@@ -44,6 +44,7 @@ from livekit import rtc
 from livekit.agents import Agent, AgentSession, APIConnectOptions
 from livekit.agents.llm import (
     ChatContext,
+    FunctionCall,
     FunctionCallOutput,
     InputTranscriptionCompleted,
     MessageGeneration,
@@ -1479,6 +1480,77 @@ async def test_generate_reply_future_times_out_and_close_never_leaves_it_hanging
         await model.aclose()
         with pytest.raises(Exception, match="closed"):
             await asyncio.wait_for(pending, timeout=1.0)
+    finally:
+        await model.aclose()
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_a_call_and_its_output_arriving_together_resolve_within_the_batch(
+    unused_tcp_port: int,
+) -> None:
+    """A function output may be validated against a call added in the same update.
+
+    ``update_chat_ctx`` builds every wire event up front before sending any of
+    them, so a batch that turns out to be unrepresentable is refused whole rather
+    than half-applied. That dry run resolved a ``FunctionCallOutput`` against
+    ``self._chat_ctx`` alone — which holds nothing from the batch being validated.
+
+    Until now that was invisible: an output always followed a call this plugin had
+    already recorded itself in ``_handle_function_call``. A deferred async-tool
+    result is the first case where a call and its output arrive *together*, and
+    they must, because ``_ToolExecutor._enqueue_reply`` synthesizes a fresh pair
+    with the call_id suffixed ``_final`` (``RunContext._make_update_pair``). The
+    dry run then failed on the output with "function output references an unknown
+    call", and no result ever reached the model.
+
+    Observed in room ``dev-martin-vds-web-call-1788239967658`` (2026-09-01): three
+    tool calls, three times that error. The send loop itself was always correct —
+    it appends each item as its acknowledgement lands, so by the time the output
+    is sent its call is in the context. Only the validation ran too early.
+    """
+    server = ContractServer(unused_tcp_port, send_transcription=False)
+    await server.start()
+    model = RealtimeModel(base_url=server.url, token="contract-secret")
+    session = model.session()
+    try:
+        await wait_client_event(server, "session.update")
+        # the replay on connect sees the whole context at once and resolves the
+        # pair fine; only a batch appended to a live session does not
+        await asyncio.wait_for(session._connected.wait(), timeout=5)
+
+        # what _make_update_pair builds: a copy of the original call carrying its
+        # turn metadata, under a call_id the service has never seen
+        turn = {
+            "hugging_voice": {
+                "turn_id": "turn_1",
+                "turn_revision": 1,
+                "generation_id": "gen_1",
+                "response_id": "resp_1",
+            }
+        }
+        call = FunctionCall(
+            call_id="call_1_final",
+            name="web_search",
+            arguments='{"query": "Wuerzburg"}',
+            extra=dict(turn),
+        )
+        output = FunctionCallOutput(
+            call_id="call_1_final",
+            name="web_search",
+            output="Drei Veranstaltungen heute Abend.",
+            is_error=False,
+        )
+
+        await session.update_chat_ctx(ChatContext([call, output]))
+
+        first = await wait_client_event(server, "conversation.item.create")
+        second = await wait_client_event(server, "conversation.item.create")
+        assert isinstance(first, ConversationItemCreateEvent)
+        assert isinstance(second, ConversationItemCreateEvent)
+        assert first.item.type == "function_call"
+        assert second.item.type == "function_call_output"
+        assert second.item.call_id == "call_1_final"
     finally:
         await model.aclose()
         await server.close()
