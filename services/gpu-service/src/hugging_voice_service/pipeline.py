@@ -167,6 +167,16 @@ class CompletedTurn:
     speech_ended_at: float
 
 
+# A resumption cancels the pending semantic fallback (``_speech_resumed`` calls
+# ``_cancel_turn_detection``), so on a noisy line a short answer can be judged
+# "unfinished", have its safety net torn away by a stray 160 ms sound, and be
+# re-judged unfinished again — losing the utterance entirely. Observed
+# 2026-09-02: 7 incomplete verdicts, 2 fallbacks, 5 resumptions, and a spoken
+# "danke" that never got a reply. After this many verdicts for one utterance we
+# answer instead of waiting again: replying a beat early beats not replying.
+MAX_INCOMPLETE_VERDICTS = 2
+
+
 class VoicePipeline:
     completed_turn_queue_size = 4
 
@@ -201,6 +211,7 @@ class VoicePipeline:
         self._turn_candidate_task: asyncio.Task[None] | None = None
         self._turn_fallback_task: asyncio.Task[None] | None = None
         self._turn_candidate_id = 0
+        self._incomplete_verdicts = 0
         self._vad_progress = asyncio.Event()
         self._prefill_task: asyncio.Task[int] | None = None
         self._prefill_key: str | None = None
@@ -521,6 +532,7 @@ class VoicePipeline:
             self.state.input_audio_buffer.discard_before(keep_from)
 
     async def _speech_started(self, sample_index: int) -> None:
+        self._incomplete_verdicts = 0
         self.state.current_turn_revision += 1
         self.state.current_turn_id = _id("turn")
         self.state.speech_start_sample = sample_index
@@ -628,6 +640,21 @@ class VoicePipeline:
                 await self._speech_stopped(sample_index, speech_ended_at=speech_ended_at)
                 return
             self._telemetry.turn_incomplete_predictions.inc()
+            self._incomplete_verdicts += 1
+            if self._incomplete_verdicts >= MAX_INCOMPLETE_VERDICTS:
+                logger.info(
+                    "semantic_turn_forced",
+                    extra={
+                        "session_id": self.state.session_id,
+                        "turn_id": turn_id,
+                        "turn_revision": revision,
+                        "verdicts": self._incomplete_verdicts,
+                        "probability": round(result.probability, 3),
+                    },
+                )
+                self._telemetry.turn_forced.inc()
+                await self._speech_stopped(sample_index, speech_ended_at=speech_ended_at)
+                return
             vad_silence_ms = self.state.vad.configuration[3]
             elapsed_ms = (time.monotonic() - detected_at) * 1_000
             remaining_ms = max(
@@ -707,6 +734,24 @@ class VoicePipeline:
             ):
                 self._telemetry.turn_fallbacks.inc()
                 await self._speech_stopped(sample_index, speech_ended_at=speech_ended_at)
+            else:
+                # Until 2026-09-02 this branch was silent, and a fallback that
+                # expired here left no trace at all: only the gap between
+                # turn_incomplete_predictions and turn_fallbacks hinted that an
+                # utterance had gone missing. Name the condition that voided it.
+                logger.info(
+                    "semantic_fallback_voided",
+                    extra={
+                        "session_id": self.state.session_id,
+                        "turn_id": turn_id,
+                        "turn_revision": revision,
+                        "draining": self._draining,
+                        "turn_changed": self.state.current_turn_id != turn_id,
+                        "revision_changed": self.state.current_turn_revision != revision,
+                        "resumed": self._turn_candidate_id != candidate_id,
+                        "speech_cleared": self.state.speech_start_sample is None,
+                    },
+                )
         except asyncio.CancelledError:
             return
         finally:

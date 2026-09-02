@@ -114,6 +114,11 @@ class ServiceTelemetry:
             "Cancelled response generations",
             registry=self.registry,
         )
+        self.turn_forced = Counter(
+            "hugging_voice_turn_forced",
+            "Turns answered because the semantic detector kept saying 'unfinished'",
+            registry=self.registry,
+        )
         self.turn_queue_seconds = Histogram(
             "hugging_voice_turn_queue_seconds",
             "Semantic turn detector scheduler queue wait",

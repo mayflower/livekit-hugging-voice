@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from hugging_voice_protocol.events import SpeechStoppedEvent
 from hugging_voice_service.config import SemanticTurnSettings, SpeechSettings
-from hugging_voice_service.pipeline import VoicePipeline
+from hugging_voice_service.pipeline import MAX_INCOMPLETE_VERDICTS, VoicePipeline
 from hugging_voice_service.runtimes.smart_turn import (
     SMART_TURN_WINDOW_SAMPLES,
     SmartTurnResult,
@@ -139,6 +139,54 @@ async def test_fallback_does_not_cut_a_pending_resumption_candidate() -> None:
     await pipeline._speech_resumed()
     await asyncio.sleep(0.3)
     assert not any(isinstance(event, SpeechStoppedEvent) for event in transport.events)
+    await pipeline.drain()
+
+
+@pytest.mark.asyncio
+async def test_a_second_unfinished_verdict_answers_instead_of_waiting_again() -> None:
+    """Two "unfinished" verdicts must commit the turn rather than lose it.
+
+    Tearing the fallback away on a resumption is deliberate (see the test
+    above), but on a noisy line the loop repeats: smart-turn says unfinished, a
+    stray sound resumes speech and cancels the pending fallback, and nothing
+    ever replies. Measured on call 1788352824491: 7 incomplete verdicts against
+    2 fallbacks and 5 resumptions, with a spoken "danke" that got no answer.
+    """
+    pipeline, _, state, transport = semantic_pipeline(0.1)
+
+    await pipeline._speech_stop_candidate(16_000)
+    first = pipeline._turn_candidate_task
+    assert first is not None
+    await first
+    await pipeline._speech_resumed()
+    assert not any(isinstance(event, SpeechStoppedEvent) for event in transport.events)
+
+    await pipeline._speech_stop_candidate(16_000)
+    second = pipeline._turn_candidate_task
+    assert second is not None
+    await second
+    await pipeline.wait_turns_idle()
+
+    assert state.speech_start_sample is None
+    assert len([event for event in transport.events if isinstance(event, SpeechStoppedEvent)]) == 1
+    await pipeline.drain()
+
+
+@pytest.mark.asyncio
+async def test_the_unfinished_streak_is_per_utterance_not_per_call() -> None:
+    """Without a reset the guard would disable semantic detection for the call.
+
+    Once two verdicts had accumulated anywhere in a conversation, every later
+    utterance would commit on its first "unfinished" verdict — turning the
+    detector off for the rest of the call instead of only rescuing the
+    utterance that was stuck.
+    """
+    pipeline, _, _, _ = semantic_pipeline(0.1)
+    pipeline._incomplete_verdicts = MAX_INCOMPLETE_VERDICTS
+
+    await pipeline._speech_started(32_000)
+
+    assert pipeline._incomplete_verdicts == 0
     await pipeline.drain()
 
 
