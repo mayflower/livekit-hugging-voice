@@ -158,10 +158,10 @@ class OutputAudioFormat(StrictModel):
 class ServerVADConfig(StrictModel):
     enabled: bool = True
     threshold: float = Field(default=0.6, ge=0.1, le=0.95)
-    min_speech_ms: int = Field(default=384, ge=96, le=2_000)
+    min_speech_ms: int = Field(default=160, ge=96, le=2_000)
     min_speech_continuation_ms: int = Field(default=192, ge=0, le=1_000)
     min_silence_ms: int = Field(default=500, ge=250, le=3_000)
-    speech_pad_ms: int = Field(default=30, ge=0, le=500)
+    speech_pad_ms: int = Field(default=200, ge=0, le=500)
     short_segment_merge_ms: Literal[0] = 0
 
 

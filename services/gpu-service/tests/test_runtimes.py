@@ -12,6 +12,7 @@ import pytest
 from aiohttp import web
 from hugging_voice_protocol.audio import OUTPUT_FRAME_BYTES
 from hugging_voice_protocol.events import FunctionDefinition, FunctionTool
+from hugging_voice_service.config import VADSettings
 from hugging_voice_service.llm_profiles import LLM_PROFILES
 from hugging_voice_service.runtimes.llama_cpp_chat import (
     BASE_PROMPT,
@@ -93,8 +94,16 @@ class FakeCudaGraphQwenModel:
 
 
 def test_session_vad_has_isolated_state_remainder_and_deterministic_boundaries() -> None:
+    # Thresholds are pinned here on purpose: this covers remainder handling and
+    # state isolation, so it must not need recomputing whenever VADSettings is
+    # recalibrated. Turn calibration is covered separately below.
     model = ScriptedVADModel([0.9] * 12 + [0.1] * 16)
     vad = SessionVAD(
+        threshold=0.6,
+        min_speech_ms=384,
+        min_speech_continuation_ms=192,
+        min_silence_ms=500,
+        speech_pad_ms=30,
         model_factory=lambda: model,
         sample_tensor_factory=lambda samples: samples,
     )
@@ -109,6 +118,47 @@ def test_session_vad_has_isolated_state_remainder_and_deterministic_boundaries()
     vad.reset()
     assert model.reset_count == 1
     assert vad.buffered_bytes == 0
+
+
+def test_a_short_word_opens_a_turn_and_keeps_its_onset_and_coda() -> None:
+    """A bare "ja" has to reach the STT — the 2026-09-02 call regression.
+
+    Seven 32 ms windows is ~224 ms, the length of a spoken "ja". Under the
+    Silero reference defaults it produced no ``speech_started`` at all (384 ms
+    of accumulated speech was never reached), so the answer was dropped before
+    transcription while the separate Deepgram transcript still showed it in the
+    dashboard. The padding also has to outlast the speech on both ends: 30 ms
+    is a single window, and cutting the onset off a short word is what turned
+    "ja, das" into "does".
+
+    The expectations are stated against the speech boundaries rather than
+    absolute sample counts, so this stays meaningful under recalibration and
+    only fails if a short word stops surviving.
+    """
+    settings = VADSettings()
+    silence_before, speech, silence_after = 10, 7, 16
+    model = ScriptedVADModel([0.1] * silence_before + [0.9] * speech + [0.1] * silence_after)
+    vad = SessionVAD(
+        threshold=settings.threshold,
+        min_speech_ms=settings.min_speech_ms,
+        min_speech_continuation_ms=settings.min_speech_continuation_ms,
+        min_silence_ms=settings.min_silence_ms,
+        speech_pad_ms=settings.speech_pad_ms,
+        model_factory=lambda: model,
+        sample_tensor_factory=lambda samples: samples,
+    )
+    windows = silence_before + speech + silence_after
+    signals = vad.process_pcm16(bytes(SessionVAD.window_bytes * windows))
+
+    assert [signal.kind for signal in signals] == ["speech_started", "speech_stopped"]
+    speech_starts_at = silence_before * SessionVAD.window_samples
+    speech_ends_at = (silence_before + speech) * SessionVAD.window_samples
+    pad_samples = settings.speech_pad_ms * SessionVAD.sample_rate // 1_000
+    # A lower bound on the calibration, not just on the mechanism: anything
+    # near the 30 ms reference default is a single window and clips the word.
+    assert settings.speech_pad_ms >= 100
+    assert signals[0].sample_index == speech_starts_at - pad_samples
+    assert signals[1].sample_index == speech_ends_at + pad_samples
 
 
 def test_silero_recurrent_model_is_constructed_per_session() -> None:

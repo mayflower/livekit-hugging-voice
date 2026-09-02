@@ -52,10 +52,10 @@ class SessionVAD:
         self,
         *,
         threshold: float = 0.6,
-        min_speech_ms: int = 384,
+        min_speech_ms: int = 160,
         min_speech_continuation_ms: int = 192,
         min_silence_ms: int = 500,
-        speech_pad_ms: int = 30,
+        speech_pad_ms: int = 200,
         model_factory: Callable[[], SileroModel] = _load_bundled_model,
         sample_tensor_factory: SampleTensorFactory = _to_torch_tensor,
     ) -> None:

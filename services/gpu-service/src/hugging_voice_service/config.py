@@ -95,11 +95,25 @@ class AudioSettings(StrictConfig):
 
 
 class VADSettings(StrictConfig):
+    """Silero thresholds, tuned for Parakeet rather than for VAD display.
+
+    ``min_speech_ms`` and ``speech_pad_ms`` deliberately deviate from the Silero
+    reference defaults (384 / 30). Those assume VAD only *reports* speech; here
+    the same numbers also cut the audio the STT has to transcribe, so a single
+    short word loses on both counts. A German "ja" runs ~200 ms and never
+    reached 384 ms of accumulated speech, so no turn was ever created — while
+    30 ms of padding is one 32 ms window, dropping the onset and coda that
+    carry most of a short word (observed: "ja, das" transcribed as "does").
+
+    These are calibration values, not constants: raise ``min_speech_ms`` if room
+    noise starts opening turns, raise ``speech_pad_ms`` if words stay clipped.
+    """
+
     threshold: float = Field(default=0.6, ge=0.1, le=0.95)
-    min_speech_ms: int = Field(default=384, ge=96, le=2_000)
+    min_speech_ms: int = Field(default=160, ge=96, le=2_000)
     min_speech_continuation_ms: int = Field(default=192, ge=0, le=1_000)
     min_silence_ms: int = Field(default=500, ge=250, le=3_000)
-    speech_pad_ms: int = Field(default=30, ge=0, le=500)
+    speech_pad_ms: int = Field(default=200, ge=0, le=500)
     short_segment_merge_ms: Literal[0] = 0
     interrupt_response: bool = True
 
