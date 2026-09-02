@@ -421,7 +421,10 @@ def test_session_speech_configuration_reaches_llm_and_tts(tmp_path: Path) -> Non
             send_context_and_response(websocket, session_id, "Hallo")
             receive_through_done(websocket, [])
 
-    assert gemma.calls[-1][0] == "Respond in clear, natural English."
+    # startswith, not equality: this covers the language switch reaching the
+    # LLM, and the instruction also carries formatting rules that are tuned
+    # separately (see VADSettings/LanguageSettings).
+    assert gemma.calls[-1][0].startswith("Respond in clear, natural English.")
     language, design, ref_audio, ref_text = qwen.calls[-1]
     assert language == "English"
     assert "native English speaker" in design

@@ -388,19 +388,35 @@ class SpeechSettings(StrictConfig):
         default_factory=lambda: {
             "de": LanguageSettings(
                 model_language="German",
-                response_instruction="Respond in clear, natural German.",
+                response_instruction=(
+                    "Respond in clear, natural German. Write numbers, times, "
+                    "prices and dates as words, never as digits: "
+                    "'elf Uhr' not '11:00', 'acht Euro fünfzig' not '8,50 Euro'."
+                ),
             ),
             "en": LanguageSettings(
                 model_language="English",
-                response_instruction="Respond in clear, natural English.",
+                response_instruction=(
+                    "Respond in clear, natural English. Write numbers, times, "
+                    "prices and dates as words, never as digits: "
+                    "'eleven' not '11:00', 'eight euros fifty' not '8.50 euros'."
+                ),
             ),
             "fr": LanguageSettings(
                 model_language="French",
-                response_instruction="Respond in clear, natural French.",
+                response_instruction=(
+                    "Respond in clear, natural French. Write numbers, times, "
+                    "prices and dates as words, never as digits: "
+                    "'onze heures' not '11h00', 'huit euros cinquante' not '8,50 euros'."
+                ),
             ),
             "it": LanguageSettings(
                 model_language="Italian",
-                response_instruction="Respond in clear, natural Italian.",
+                response_instruction=(
+                    "Respond in clear, natural Italian. Write numbers, times, "
+                    "prices and dates as words, never as digits: "
+                    "'undici' not '11:00', 'otto euro e cinquanta' not '8,50 euro'."
+                ),
             ),
         },
         min_length=1,
