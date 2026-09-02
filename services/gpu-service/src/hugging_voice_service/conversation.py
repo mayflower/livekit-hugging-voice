@@ -71,7 +71,11 @@ ConversationGroup: TypeAlias = ConversationEntry | ToolExchangeGroup
 
 
 class Conversation:
-    def __init__(self, *, max_messages: int = 30, max_characters: int = 48_000) -> None:
+    # max_messages is a coarse guard; max_characters is the one that protects the
+    # context window (llama_context_size is 32768 total, divided across parallel
+    # slots). 30 items cut a normal call short long before the characters ran
+    # out, so the character budget is left to do the limiting.
+    def __init__(self, *, max_messages: int = 200, max_characters: int = 48_000) -> None:
         if max_messages < 1 or max_characters < 1:
             raise ValueError("conversation limits must be positive")
         self._groups: deque[ConversationGroup] = deque()
