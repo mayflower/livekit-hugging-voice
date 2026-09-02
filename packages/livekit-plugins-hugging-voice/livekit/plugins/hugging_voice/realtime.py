@@ -101,6 +101,19 @@ TEXT_CHANNEL_SIZE = 64
 AUDIO_CHANNEL_SIZE = 128
 RETRY_RESET_AFTER_SECONDS = 30.0
 
+# A runaway guard, not the model's memory limit. The service keeps its own
+# bounded conversation (Conversation._trim, FIFO over max_messages /
+# max_characters) and *drops* the oldest groups when a call outgrows it — it
+# never refuses one. This used to be 30, mirroring that limit as if the service
+# rejected the overflow, so a call simply died once it got long enough: the
+# raise leaves the tool output unconfirmed, and the next response fails with
+# "pending tool call requires a confirmed output", which the session treats as
+# unrecoverable (voicebot room dev-martin-vds-web-call-1788338729362,
+# 2026-09-02, killed at 33 items). This plugin's own record is append-only and
+# never trimmed, so it legitimately holds more than the service does; the cap
+# only has to stay out of the way of a real call.
+_MAX_CHAT_CTX_ITEMS = 2000
+
 PluginEvent = Literal[
     "hugging_voice_server_event_received",
     "hugging_voice_client_event_queued",
@@ -558,8 +571,10 @@ class RealtimeSession(LiveKitRealtimeSession[PluginEvent]):
             )
         known = {item.id for item in current}
         additions = [item for item in replacement if item.id not in known]
-        if len(current) + len(additions) > 30:
-            raise RealtimeError("Hugging Voice chat context is limited to 30 items")
+        if len(current) + len(additions) > _MAX_CHAT_CTX_ITEMS:
+            raise RealtimeError(
+                f"Hugging Voice chat context is limited to {_MAX_CHAT_CTX_ITEMS} items"
+            )
         if absent := [item.id for item in current if item.id not in {i.id for i in replacement}]:
             # Expected while the framework is still speaking a turn this plugin
             # has already recorded; see _rewritten_item. Worth a line only because
