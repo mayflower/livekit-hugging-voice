@@ -28,11 +28,25 @@ class VADSignal:
 
 
 def _load_bundled_model() -> SileroModel:
+    """Load the ONNX build, which holds the GIL once instead of per operator.
+
+    Every 40 ms chunk runs this model through ``asyncio.to_thread``, on the same
+    executor as final STT. The JIT build is many small torch ops, each cycling
+    the GIL, so a Parakeet call — itself a long chain of GIL round trips around
+    CUDA syncs — queues behind them. Measured in the deployed pod: 3 s of speech
+    transcribes in 60 ms alone, but one VAD stream at 25 Hz pushed the same call
+    to 1497 ms while the median stayed at 69 ms. ONNX Runtime releases the GIL
+    for the whole graph and brought that peak back to 114 ms.
+
+    Both builds ship inside the pinned ``silero-vad`` package, so this stays
+    offline and within the verified revision.
+    """
+
     import torch
     from silero_vad import load_silero_vad
 
     torch.set_num_threads(1)
-    return cast(SileroModel, load_silero_vad(onnx=False))
+    return cast(SileroModel, load_silero_vad(onnx=True))
 
 
 def _to_torch_tensor(samples: Any) -> Any:

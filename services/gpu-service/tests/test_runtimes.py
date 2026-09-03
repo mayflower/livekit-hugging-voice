@@ -177,6 +177,21 @@ def test_silero_recurrent_model_is_constructed_per_session() -> None:
     assert first is not second
 
 
+def test_bundled_silero_model_satisfies_the_runtime_contract() -> None:
+    """Guard the real ONNX build; every other VAD test injects a fake.
+
+    Loading it here is what would catch a ``silero-vad`` bump that renames the
+    ONNX artifact or changes what the wrapper returns.
+    """
+
+    pytest.importorskip("torch", reason="Silero needs the gpu extra")
+    pytest.importorskip("silero_vad", reason="Silero needs the gpu extra")
+
+    vad = SessionVAD()
+    assert vad.process_pcm16(bytes(SessionVAD.window_bytes * 4)) == []
+    assert vad.flush() == []
+
+
 class FakeParakeetModel:
     def __init__(self) -> None:
         self.inputs: list[np.ndarray[Any, Any]] = []
