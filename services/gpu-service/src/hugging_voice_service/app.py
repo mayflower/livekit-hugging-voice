@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -125,6 +126,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # A thread waiting on the GIL gives up after this long. STT, VAD and Smart
+    # Turn all run on one executor, and Parakeet reacquires the GIL after every
+    # CUDA sync in its decode loop, so the default 5 ms multiplies across those
+    # hundreds of hand-offs. Measured in the deployed pod: dropping to 1 ms cut
+    # the worst transcription from 1549 ms to 104 ms, median unchanged.
+    sys.setswitchinterval(0.001)
     args = _parse_args(argv)
     settings = load_settings(args.config)
     uvicorn.run(create_app(settings), host=settings.server.host, port=settings.server.port)
