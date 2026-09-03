@@ -125,7 +125,7 @@ class ManagedSmartTurn(Protocol):
 
 
 LlamaFactory = Callable[[Path, Path, ServiceSettings], ManagedLlama]
-ParakeetFactory = Callable[[Path], ManagedParakeet]
+ParakeetFactory = Callable[[Path, Callable[[float], None]], ManagedParakeet]
 QwenFactory = Callable[[Path, Path | None, SpeechSettings, TTSSettings], ManagedQwen]
 GemmaFactory = Callable[
     [int, int, LLMProfile, Callable[[], None], Callable[[str], None]], ManagedGemma
@@ -350,7 +350,10 @@ class ServiceLifecycle:
                 self._llama_monitor = asyncio.create_task(self._monitor_llama())
 
                 self.phase = LifecyclePhase.LOADING_PARAKEET
-                self.parakeet = self._parakeet_factory(artifacts["parakeet"])
+                self.parakeet = self._parakeet_factory(
+                    artifacts["parakeet"],
+                    self.telemetry.stt_runtime_seconds.observe,
+                )
                 await asyncio.to_thread(self.parakeet.load)
                 await asyncio.to_thread(self.parakeet.warmup)
                 self.telemetry.model_loads.labels(model="parakeet").inc()

@@ -221,6 +221,32 @@ async def test_parakeet_loads_once_uses_local_file_and_runs_off_loop(tmp_path: P
     runtime.close()
 
 
+@pytest.mark.asyncio
+async def test_parakeet_reports_model_compute_separately(tmp_path: Path) -> None:
+    """The observer is the only way to see compute apart from GIL wait.
+
+    stt_inference_seconds wraps the await, so it cannot tell a slow model from
+    a thread that never got scheduled. If this wiring breaks, that metric goes
+    quietly empty instead of failing.
+    """
+
+    checkpoint = tmp_path / "model.nemo"
+    checkpoint.write_bytes(b"checkpoint")
+    observed: list[float] = []
+    runtime = ParakeetRuntime(
+        checkpoint,
+        observed.append,
+        model_factory=lambda path: FakeParakeetModel(),
+        cuda_probe=lambda: None,
+    )
+    runtime.load()
+    await runtime.transcribe_final(bytes(3_200))
+    await runtime.transcribe_partial(bytes(3_200))
+    runtime.close()
+    assert len(observed) == 2
+    assert all(seconds >= 0.0 for seconds in observed)
+
+
 class FakeQwenModel:
     def __init__(self) -> None:
         self.warmups = 0

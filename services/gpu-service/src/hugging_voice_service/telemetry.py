@@ -190,6 +190,15 @@ class ServiceTelemetry:
             "STT inference duration",
             registry=self.registry,
         )
+        # Pairs with stt_inference_seconds, which wraps the await and therefore
+        # also counts thread dispatch and time spent waiting for the GIL. This
+        # one is taken inside the worker thread around the model call, so the
+        # difference between the two is wait rather than compute.
+        self.stt_runtime_seconds = Histogram(
+            "hugging_voice_stt_runtime_seconds",
+            "STT model compute, measured inside the worker thread",
+            registry=self.registry,
+        )
         self.transcription_delay_seconds = Histogram(
             "hugging_voice_transcription_delay_seconds",
             "Speech stop to final transcription",

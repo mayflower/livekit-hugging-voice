@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -13,6 +14,11 @@ class ParakeetModel(Protocol):
 
 
 ModelFactory = Callable[[Path], ParakeetModel]
+ObserveSeconds = Callable[[float], None]
+
+
+def _ignore_seconds(seconds: float) -> None:
+    del seconds
 
 
 def _require_cuda() -> None:
@@ -57,11 +63,13 @@ class ParakeetRuntime:
     def __init__(
         self,
         checkpoint: Path,
+        observe_seconds: ObserveSeconds = _ignore_seconds,
         *,
         model_factory: ModelFactory = _load_local_model,
         cuda_probe: Callable[[], None] = _require_cuda,
     ) -> None:
         self._checkpoint = checkpoint
+        self._observe_seconds = observe_seconds
         self._model_factory = model_factory
         self._cuda_probe = cuda_probe
         self._model: ParakeetModel | None = None
@@ -98,7 +106,9 @@ class ParakeetRuntime:
         if len(pcm16) % 2:
             raise ValueError("Parakeet input must contain complete PCM16 samples")
         audio = np.frombuffer(pcm16, dtype="<i2").astype(np.float32) / 32768.0
+        started = time.perf_counter()
         result = self._model.transcribe(audio, timestamps=False)
+        self._observe_seconds(time.perf_counter() - started)
         if not isinstance(result, str):
             raise RuntimeError("Parakeet returned an unexpected transcription result")
         return result.strip()
