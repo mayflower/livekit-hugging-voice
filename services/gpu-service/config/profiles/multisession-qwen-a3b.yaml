@@ -46,10 +46,10 @@ audio:
 
 vad:
   threshold: 0.6
-  min_speech_ms: 384
+  min_speech_ms: 160
   min_speech_continuation_ms: 192
   min_silence_ms: 250
-  speech_pad_ms: 30
+  speech_pad_ms: 200
   short_segment_merge_ms: 0
   interrupt_response: true
 

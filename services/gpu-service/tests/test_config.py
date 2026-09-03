@@ -8,6 +8,7 @@ from hugging_voice_service.config import (
     SegmentationSettings,
     ServiceSettings,
     SpeechSettings,
+    VADSettings,
     VoiceReference,
     VoiceSettings,
     default_voice_reference_dir,
@@ -25,6 +26,11 @@ def test_default_config_matches_fixed_audio_and_capacity_contract() -> None:
     assert settings.audio.output_sample_rate == 24_000
     assert settings.audio.vad_window_samples == 512
     assert settings.vad.min_silence_ms == 250
+    # Calibration lives in VADSettings; the shipped YAML must not fork from it.
+    # It did once: 2592686 lowered the code defaults after short answers went
+    # missing and left every config file on the old 384/30.
+    assert settings.vad.min_speech_ms == VADSettings().min_speech_ms
+    assert settings.vad.speech_pad_ms == VADSettings().speech_pad_ms
     assert settings.semantic_turn.mode == "smart_turn_v3"
     assert settings.semantic_turn.completion_threshold == 0.5
     assert settings.semantic_turn.fallback_silence_ms == 2_500
