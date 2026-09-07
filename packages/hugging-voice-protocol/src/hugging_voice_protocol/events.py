@@ -16,7 +16,12 @@ MAX_VOICE_INSTRUCTIONS_CHARS = 2_000
 MAX_CONTEXT_ITEM_CHARS = 16_000
 MAX_TEXT_DELTA_CHARS = 4_096
 MAX_ERROR_MESSAGE_CHARS = 2_048
-MAX_TOOLS = 32
+# Raised from 32 (2026-09-03): a client pairing a 32-tool catalog with
+# anything else exceeded the cap, and the tool list is rejected as a unit,
+# so the session starts with no tools at all. The binding resource is
+# MAX_ALL_TOOL_SCHEMAS_BYTES below, which 32 tools of a real catalog fill
+# to only 30 percent.
+MAX_TOOLS = 48
 MAX_TOOL_NAME_CHARS = 64
 MAX_TOOL_DESCRIPTION_CHARS = 2_048
 MAX_TOOL_SCHEMA_BYTES = 16 * 1_024
