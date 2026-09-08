@@ -2,6 +2,15 @@
 
 ## 0.3.0 - unreleased
 
+- Fix a session-ending crash when the caller speaks over the end of a turn.
+  `speech_started` carries `speech_pad_ms` of pre-roll, and the turn that just
+  closed has discarded everything up to its own end, so the padded start could
+  land before the retained buffer front — every later slice for that segment
+  then raised, reaching the client as a non-retryable error that dropped the
+  call. The start is now clamped to what the buffer still holds. At the
+  calibrated `speech_pad_ms: 200` this hit three calls on 2026-09-08, short by
+  256, 1280 and 1792 samples; at the previous 30 ms the window was too narrow to
+  notice.
 - Add `thorsten`, the first voice cloned from a real human recording instead of
   from a rendering of its own description, and make it the default. The excerpt
   comes from the CC0-1.0 `Thorsten-Voice/TV-44kHz-Full` dataset and exists in

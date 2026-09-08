@@ -535,6 +535,18 @@ class VoicePipeline:
         self._incomplete_verdicts = 0
         self.state.current_turn_revision += 1
         self.state.current_turn_id = _id("turn")
+        # ``sample_index`` carries the VAD's ``speech_pad_ms`` of pre-roll, so it
+        # points *behind* the moment speech was detected — and that pre-roll can
+        # already be gone, because a turn completing just before this discarded
+        # everything up to its own end. Clamp to what the buffer still holds:
+        # every consumer of ``speech_start_sample`` (``_schedule_partial``, the
+        # turn-candidate window, ``_complete_turn``) slices with it, and
+        # ``AudioBuffer.slice_samples`` raises on a start below ``first_sample``.
+        # That exception reaches the client as a non-retryable error and ends the
+        # call — which is what a caller talking over the previous turn produced
+        # three times on 2026-09-08, short of the buffer by 256, 1280 and 1792
+        # samples against the 3200 that ``speech_pad_ms: 200`` asks for.
+        sample_index = max(sample_index, self.state.input_audio_buffer.first_sample)
         self.state.speech_start_sample = sample_index
         self._speech_stopped_at = None
         self._speech_ended_at = None
@@ -887,6 +899,11 @@ class VoicePipeline:
             await asyncio.gather(self._partial_task, return_exceptions=True)
             self._partial_task = None
         audio = self.state.input_audio_buffer.slice_samples(start_sample, end_sample)
+        # Everything before this turn's end goes: no segment can be open here.
+        # ``_speech_stopped`` clears ``speech_start_sample`` immediately above its
+        # call to this, and a new one can only be opened afterwards — which is
+        # why the clamp against this discard lives in ``_speech_started`` and not
+        # here.
         self.state.input_audio_buffer.discard_before(end_sample)
         completed = CompletedTurn(
             turn_id=turn_id,

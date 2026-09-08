@@ -454,6 +454,50 @@ async def test_instruction_update_preserves_buffered_audio_and_vad_state() -> No
 
 
 @pytest.mark.asyncio
+async def test_speech_starting_behind_a_discarded_buffer_front_is_clamped() -> None:
+    """A caller who talks over the end of a turn must not end the session.
+
+    ``_complete_turn`` discards everything up to the turn it just closed, and the
+    VAD hands the next ``speech_started`` a ``sample_index`` that reaches
+    ``speech_pad_ms`` further back still. At the deployed 200 ms that is 3200
+    samples, so the start lands before the retained front and every later slice
+    for that segment — the partial window, the turn candidate, the turn's own
+    audio — raises out of ``AudioBuffer.slice_samples``. The client sees a
+    non-retryable error and drops the call, which happened three times on
+    2026-09-08 with shortfalls of 256, 1280 and 1792 samples.
+    """
+    state, _ = make_state()
+    pipeline = VoicePipeline(
+        state,
+        stt=RecordingPartialSTT(),
+        tts=ImmediateTTS(),
+        gemma=ImmediateGemma(),
+        speech=SpeechSettings(),
+        transcription=TranscriptionSettings(
+            partial_enabled=True,
+            partial_interval_ms=1_000,
+            partial_max_audio_ms=4_000,
+        ),
+        telemetry=ServiceTelemetry(),
+    )
+    state.input_audio_buffer.append(bytes(16_000 * 2))
+    # What ``_complete_turn`` leaves behind once a turn has closed.
+    state.input_audio_buffer.discard_before(16_000)
+    assert state.input_audio_buffer.first_sample == 16_000
+
+    padded_start = 16_000 - 3_200
+    await pipeline._speech_started(padded_start)
+
+    assert state.speech_start_sample == 16_000, "the lost pre-roll cannot be sliced"
+    # The slice the next partial takes is what used to raise.
+    state.input_audio_buffer.append(bytes(16_000 * 2))
+    state.last_partial_at = 0
+    pipeline._schedule_partial()
+    assert pipeline._partial_task is not None
+    await pipeline._partial_task
+
+
+@pytest.mark.asyncio
 async def test_partial_stt_is_disabled_by_default_and_uses_a_bounded_sliding_window() -> None:
     state, _ = make_state()
     stt = RecordingPartialSTT()
